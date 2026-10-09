@@ -304,8 +304,6 @@ impl Run<'_> {
             // The tracker may commit in the integration worktree, so wait out any landing.
             let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
             let reason = outcome.reason.as_deref();
-            // A tracker write may commit in `_integration`; never during another merge.
-            let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
             outcome.written =
                 writeback::outcome(self.tracker, self.cx, &ticket.id, outcome.kind, reason);
         }
