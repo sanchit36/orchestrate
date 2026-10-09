@@ -4,7 +4,7 @@
 //! adapter JSON schema below, or the operation fails.
 
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use super::{Blocker, Spec, Ticket, Tracker, Unsupported};
+use super::{Blocker, Spec, Ticket, Tracker, Unsupported, approvals};
 use crate::config;
 
 /// shortcut: one fixed limit per template call; make it a `[tracker]` key if a tracker needs more.
@@ -190,8 +190,8 @@ fn quote(s: &str) -> String {
 pub fn check(templates: &config::Commands, top: &Path) -> Result<Vec<String>> {
     refuse_secrets(templates)?;
     let hash = approval_hash(templates);
-    let path = approvals_path()?;
-    if !approved(&hash)? {
+    let path = approvals::path()?;
+    if !approvals::approved(&hash)? {
         bail!(
             "the [tracker.commands] templates are not approved ({hash}); review them, then \
              approve them by adding `[[approved]]` with `hash = \"{hash}\"` to {}",
@@ -260,51 +260,6 @@ pub fn sha256(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect();
     format!("sha256:{hex}")
-}
-
-/// `~/.config/orchestrate/approvals.toml`: `[[approved]]` entries with a `hash`.
-#[derive(Deserialize, Default)]
-struct Approvals {
-    #[serde(default)]
-    approved: Vec<Approval>,
-}
-
-#[derive(Deserialize)]
-struct Approval {
-    hash: String,
-}
-
-fn approvals_path() -> Result<PathBuf> {
-    Ok(config::machine_dir()?.join("approvals.toml"))
-}
-
-/// Whether `hash` (an [`approval_hash`]) is in the approvals file.
-pub fn approved(hash: &str) -> Result<bool> {
-    Ok(approvals(&approvals_path()?)?
-        .approved
-        .iter()
-        .any(|a| a.hash == hash))
-}
-
-/// Appends `hash` to the approvals file as one `[[approved]]` entry.
-pub fn approve(hash: &str) -> Result<()> {
-    let path = approvals_path()?;
-    fs::create_dir_all(config::machine_dir()?)?;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    writeln!(file, "[[approved]]\nhash = \"{hash}\"")
-        .with_context(|| format!("writing {}", path.display()))
-}
-
-fn approvals(path: &Path) -> Result<Approvals> {
-    match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).with_context(|| format!("{}", path.display())),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Approvals::default()),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
 }
 
 /// Well-known token prefixes; a word starting with one is a token.

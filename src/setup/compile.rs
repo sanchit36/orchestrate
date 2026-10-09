@@ -12,7 +12,7 @@ use toml::Value;
 
 use super::{Ask, detect};
 use crate::config::Commands;
-use crate::tracker::commands;
+use crate::tracker::{approvals, commands};
 
 /// What the agent compiles from.
 pub struct Source {
@@ -68,7 +68,7 @@ pub fn templates(
         }
     }
     let hash = commands::approval_hash(&templates);
-    if !commands::approved(&hash)? {
+    if !approvals::approved(&hash)? {
         if !yes(
             ask,
             "Approve these templates to run against your tracker (yes or no)",
@@ -76,7 +76,7 @@ pub fn templates(
         )? {
             bail!("command templates not approved; nothing written");
         }
-        commands::approve(&hash)?;
+        approvals::approve(&hash)?;
     }
     Ok(Value::try_from(templates)?)
 }
