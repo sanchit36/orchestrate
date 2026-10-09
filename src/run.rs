@@ -231,7 +231,11 @@ pub fn drive(
         }
         Ok(())
     })?;
-    worktree::remove_worktree(top, &integration_wt)?;
+    // A worktree left behind is for `clean`; the run itself has ended.
+    if let Err(e) = worktree::remove_worktree(top, &integration_wt) {
+        let e = format!("{e:#}").replace('\n', " ");
+        events.event(&format!("could not remove the integration worktree: {e}"));
+    }
 
     let (counts, problems) = store.update(|state| {
         state.status = "ended".into();

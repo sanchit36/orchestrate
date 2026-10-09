@@ -253,6 +253,26 @@ fn landed_ticket_worktrees_branches_and_the_integration_worktree_are_removed() {
 }
 
 #[test]
+fn a_run_whose_integration_worktree_cannot_be_removed_still_ends_with_its_summary() {
+    let s = Scratch::new();
+    // A locked worktree refuses `git worktree remove --force`.
+    s.local_markdown_tracker_with_gate("git worktree lock ../_integration || true");
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "a", "Add schema", "ready-for-agent", &[]);
+    s.commit_all();
+    s.claude_lands();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(
+        out.contains("could not remove the integration worktree"),
+        "{out}"
+    );
+    assert!(out.contains("ended: 1 finished"), "{out}");
+    assert!(out.contains("git push -u origin int"), "{out}");
+}
+
+#[test]
 fn the_foreground_and_run_log_hold_the_same_timestamped_event_lines() {
     let s = chain();
 
