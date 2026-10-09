@@ -298,6 +298,8 @@ impl Run<'_> {
     fn work(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
         let mut outcome = self.attempt(reading, ticket, events)?;
         if outcome.kind != "finished" {
+            // The tracker may commit in the integration worktree, so wait out any landing.
+            let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
             let reason = outcome.reason.as_deref();
             outcome.written =
                 writeback::outcome(self.tracker, self.cx, &ticket.id, outcome.kind, reason);
