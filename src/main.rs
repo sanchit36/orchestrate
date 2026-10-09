@@ -47,6 +47,10 @@ enum Cmd {
         /// The integration branch: created from `HEAD`, or reused if it exists.
         #[arg(long)]
         branch: String,
+        /// Sessions at once: `auto` (from the graph width and cores) or a number.
+        /// Defaults to the machine config's `max_parallel`, else `auto`.
+        #[arg(long)]
+        max_parallel: Option<config::MaxParallel>,
         /// Keep running in the background after the terminal closes.
         #[arg(long)]
         detach: bool,
@@ -76,10 +80,11 @@ fn main() -> ExitCode {
         Cmd::Run {
             spec,
             branch,
+            max_parallel,
             detach,
         } => git_toplevel().and_then(|top| match detach {
-            true => control::detach(&top, &spec, &branch),
-            false => run::run(&top, &spec, &branch),
+            true => control::detach(&top, &spec, &branch, max_parallel),
+            false => run::run(&top, &spec, &branch, max_parallel),
         }),
         Cmd::Stop { run } => git_toplevel().and_then(|top| control::stop(&top, run.as_deref())),
         Cmd::Status { ticket, run } => {

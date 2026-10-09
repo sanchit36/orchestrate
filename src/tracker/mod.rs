@@ -6,6 +6,7 @@ mod commands;
 pub(crate) mod contract;
 mod local_markdown;
 mod pausing;
+mod remote;
 
 use std::path::Path;
 
@@ -14,13 +15,16 @@ use anyhow::Result;
 use crate::config::{RepoConfig, TrackerKind};
 
 pub use pausing::Pausing;
+pub use remote::{Msg, Remote};
 
+#[derive(Clone)]
 pub struct Spec {
     pub id: String,
     pub title: String,
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct Ticket {
     pub id: String,
     pub title: String,
@@ -29,6 +33,7 @@ pub struct Ticket {
     pub ready: bool,
 }
 
+#[derive(Clone)]
 pub struct Blocker {
     pub id: String,
     /// `None` when the blocker is not found on the tracker.

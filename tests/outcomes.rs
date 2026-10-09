@@ -170,7 +170,10 @@ fn a_session_past_its_timeout_has_its_process_group_killed_and_times_out() {
     );
     let started = Instant::now();
 
-    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+    // One at a time: under load a concurrent 1s session (c) could time out too.
+    let out = s
+        .run(&["run", "auth", "--branch", "int", "--max-parallel", "1"])
+        .ok();
 
     assert!(started.elapsed() < Duration::from_secs(20));
     let st = state(&s);

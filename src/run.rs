@@ -1,24 +1,29 @@
-//! Run loop: re-reads the tracker, works the frontier one session at a time and
-//! lands each ticket's gated work on the integration branch.
+//! Run loop: a dispatcher that re-reads the tracker each time it picks tickets, works
+//! up to the session ceiling at once, and lands each ticket's gated work on the
+//! integration branch, one landing at a time.
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 use anyhow::{Result, bail};
 
-use crate::config::{self, RepoConfig};
+use crate::config::{self, MaxParallel, RepoConfig};
 use crate::git::{self, git};
 use crate::integrator::{self, Integration, Landing};
 use crate::report::Report;
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, RunDirs, State, Store, TicketState};
-use crate::tracker::{self, Pausing, Ticket, Tracker};
+use crate::tracker::{self, Msg, Pausing, Remote, Ticket, Tracker};
 use crate::writeback::{self, Written};
 use crate::{control, planner, prompt, session, worktree};
 
-pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
+/// What a worker sends back when its ticket's work ends.
+type Done = (String, Result<Outcome>);
+
+pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) -> Result<()> {
     let (config, machine) = config::load(top)?;
     for warning in tracker::check(&config, top)? {
         eprintln!("orchestrate: warning: {warning}");
@@ -26,6 +31,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     if config.gates.is_empty() {
         bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
     }
+    let max = max.unwrap_or(machine.max_parallel);
     let protected = match &config.protected_branches {
         Some(list) => list.clone(),
         None => git::origin_default_branch(top)?.into_iter().collect(),
@@ -35,11 +41,8 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     }
     let headings = &config.criteria_headings;
     // Refuse a spec that cannot start before anything is created.
-    planner::plan(&spec::read(
-        tracker::open(&config, top).as_ref(),
-        spec_id,
-        headings,
-    )?)?;
+    let start = spec::read(tracker::open(&config, top).as_ref(), spec_id, headings)?;
+    planner::plan(&start)?;
 
     let dirs = RunDirs::create(&machine, top, spec_id)?;
     let notify = machine.notifications != Some(false);
@@ -53,9 +56,11 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         "run {} started: spec {spec_id}, integration branch {branch}",
         dirs.id
     ));
+    events.event(&format!("max parallel: {}", planner::ceiling(max, &start)));
 
     // The tracker reads and writes back in the integration worktree, never the user's checkout.
-    // A tracker failure pauses the run until the tracker answers again.
+    // A tracker failure pauses the run until the tracker answers again. Only this
+    // (the dispatcher) thread calls it; workers reach it through a `Remote`.
     let tracker = Pausing::new(
         tracker::open(&config, &integration_wt),
         &config.tracker,
@@ -69,54 +74,115 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut private = vec![(top, "<repo>"), (state_dir(&dirs), "<state>")];
     private.extend(home.as_deref().map(|h| (h, "~")));
-    let run = Run {
-        top,
-        config: &config,
-        dirs: &dirs,
-        into: &into,
-        tracker: &tracker,
-        cx: writeback::Context {
-            run_id: &dirs.id,
-            branch,
-            private,
-        },
-        store: &store,
+    let cx = writeback::Context {
+        run_id: &dirs.id,
+        branch,
+        private,
     };
+    let landing = Mutex::new(());
+    let (config, dirs, into, cx, store_ref, landing) =
+        (&config, &dirs, &into, &cx, &*store, &landing);
     let mut tried = HashSet::new();
-    loop {
-        let reading = spec::reread(&tracker, spec_id, headings)?;
-        store.update(|state| {
-            for t in reading.tickets.iter().map(|e| &e.ticket) {
-                let seen = state
-                    .tickets
-                    .entry(t.id.clone())
-                    .or_insert_with(|| TicketState {
-                        outcome: if t.finished { "finished" } else { "pending" }.into(),
-                        ..TicketState::default()
-                    });
-                seen.title = t.title.clone();
+    let mut running = 0;
+    // Whether the run is paused on a blocking cycle, and the wait before its next re-read.
+    let mut cycle = false;
+    let mut wait = config.tracker.probe_backoff;
+    thread::scope(|scope| -> Result<()> {
+        let (tx, rx) = mpsc::channel::<Msg<Done>>();
+        loop {
+            let reading = spec::reread(&tracker, spec_id, headings)?;
+            store.update(|state| {
+                for t in reading.tickets.iter().map(|e| &e.ticket) {
+                    let seen = state
+                        .tickets
+                        .entry(t.id.clone())
+                        .or_insert_with(|| TicketState {
+                            outcome: if t.finished { "finished" } else { "pending" }.into(),
+                            ..TicketState::default()
+                        });
+                    seen.title = t.title.clone();
+                }
+            })?;
+            match planner::plan(&reading) {
+                Err(e) => {
+                    // Like a pause: nothing new starts; running sessions finish.
+                    if !cycle {
+                        events.event(&format!("run paused: {e:#}"));
+                        cycle = true;
+                    }
+                }
+                Ok(plan) => {
+                    if cycle {
+                        events.event("run recovered: blocking cycle resolved");
+                        (cycle, wait) = (false, config.tracker.probe_backoff);
+                    }
+                    let free = planner::ceiling(max, &reading).saturating_sub(running);
+                    // Tracker order; no model call.
+                    let next: Vec<_> = plan
+                        .frontier
+                        .into_iter()
+                        .filter(|t| !tried.contains(&t.id))
+                        .take(free)
+                        .collect();
+                    for ticket in next {
+                        tried.insert(ticket.id.clone());
+                        store.update(|s| {
+                            s.tickets.get_mut(&ticket.id).map(|t| {
+                                t.outcome = "running".into();
+                                t.started = Some(jiff::Timestamp::now().to_string());
+                            })
+                        })?;
+                        running += 1;
+                        let (reading, ticket) = (reading.clone(), ticket.clone());
+                        let tx = tx.clone();
+                        scope.spawn(move || {
+                            let remote = Remote(tx.clone());
+                            let run = Run {
+                                top,
+                                config,
+                                dirs,
+                                into,
+                                tracker: &remote,
+                                cx,
+                                store: store_ref,
+                                landing,
+                            };
+                            let outcome = Events::open(&dirs.logs.join("run.log"))
+                                .and_then(|mut events| run.work(&reading, &ticket, &mut events));
+                            let _ = tx.send(Msg::Done((ticket.id, outcome)));
+                        });
+                    }
+                }
             }
-        })?;
-        let next = planner::plan(&reading)?
-            .frontier
-            .into_iter()
-            .find(|t| !tried.contains(&t.id));
-        let Some(ticket) = next else { break };
-        tried.insert(ticket.id.clone());
-        run.ticket(&ticket.id, |t| {
-            t.outcome = "running".into();
-            t.started = Some(jiff::Timestamp::now().to_string());
-        })?;
-        let outcome = run.work(&reading, ticket, &mut events)?;
-        let kind = outcome.kind;
-        events.notify(&format!("{} {}: {kind}", ticket.id, ticket.title));
-        store.update(|state| {
-            set_outcome(state, &ticket.id, outcome);
-            if kind != "finished" {
-                block_dependents(state, &reading, &ticket.id, kind, &mut events);
+            if running == 0 {
+                if !cycle {
+                    break;
+                }
+                thread::sleep(wait);
+                wait = (wait * 2).min(config.tracker.probe_backoff_max);
+                continue;
             }
-        })?;
-    }
+            // Serve the workers' tracker calls until one ticket's work ends.
+            let (id, outcome) = loop {
+                match rx.recv()? {
+                    Msg::Call(call) => call(&tracker),
+                    Msg::Done(done) => break done,
+                }
+            };
+            running -= 1;
+            let outcome = outcome?;
+            let kind = outcome.kind;
+            let title = store.update(|s| s.tickets.get(&id).map(|t| t.title.clone()))?;
+            events.notify(&format!("{id} {}: {kind}", title.unwrap_or_default()));
+            store.update(|state| {
+                set_outcome(state, &id, outcome);
+                if kind != "finished" {
+                    block_dependents(state, &reading, &id, kind, &mut events);
+                }
+            })?;
+        }
+        Ok(())
+    })?;
 
     let (counts, problems) = store.update(|state| {
         state.status = "ended".into();
@@ -218,8 +284,10 @@ struct Run<'a> {
     dirs: &'a RunDirs,
     into: &'a Integration<'a>,
     tracker: &'a dyn Tracker,
-    cx: writeback::Context<'a>,
+    cx: &'a writeback::Context<'a>,
     store: &'a Store,
+    /// The integration lock: one landing (through write-back and teardown) at a time.
+    landing: &'a Mutex<()>,
 }
 
 impl Run<'_> {
@@ -235,7 +303,7 @@ impl Run<'_> {
         if outcome.kind != "finished" {
             let reason = outcome.reason.as_deref();
             outcome.written =
-                writeback::outcome(self.tracker, &self.cx, &ticket.id, outcome.kind, reason);
+                writeback::outcome(self.tracker, self.cx, &ticket.id, outcome.kind, reason);
         }
         Ok(outcome)
     }
@@ -286,6 +354,8 @@ impl Run<'_> {
             Ok(_) if new_commits == "0" => Some("no new commits".into()),
             Ok(_) => None,
         };
+        let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gates = Vec::new();
         let landing = match failure {
             Some(reason) => Landing::Failed(reason),
             None => {
@@ -302,6 +372,14 @@ impl Run<'_> {
                     &message,
                     &mut results,
                 )?;
+                // Each gate as it went, for the landing comment; no result means skipped.
+                gates = (self.config.gates.iter())
+                    .map(|g| match results.iter().find(|r| r.name == g.name) {
+                        Some(r) if r.code == 0 => format!("{}: passed", g.name),
+                        Some(r) => format!("{}: exited {}", g.name, r.code),
+                        None => format!("{}: skipped", g.name),
+                    })
+                    .collect();
                 self.ticket(&ticket.id, |t| t.gates = results)?;
                 landing
             }
@@ -314,9 +392,8 @@ impl Run<'_> {
                     .flat_map(|e| &e.criteria)
                     .map(|c| c.text.clone())
                     .collect();
-                let gates: Vec<&str> = self.config.gates.iter().map(|g| g.name.as_str()).collect();
                 let written =
-                    writeback::landed(self.tracker, &self.cx, &ticket.id, &criteria, &sha, &gates)?;
+                    writeback::landed(self.tracker, self.cx, &ticket.id, &criteria, &sha, &gates)?;
                 worktree::remove(self.top, &wt, &branch)?;
                 events.event(&format!(
                     "ticket {} finished: merged {}",
