@@ -8,4 +8,4 @@ We rejected letting an agent read the tracker guide and perform operations at ru
 
 - Every adapter response is validated against the schema; on error or bad output the run retries briefly, then pauses and starts nothing new.
 - Sessions never touch the tracker; the orchestrator is its only reader and writer.
-- Agent-driven tracker access is allowed only for optional writing back (prose, comments), where a mistake is cheap.
+- No agent touches the tracker at run time, not even for optional writing back: commenting and ticking criteria are optional deterministic adapter operations, skipped where an adapter lacks them.

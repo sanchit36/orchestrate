@@ -51,7 +51,7 @@ What a session hands back when it exits: done or stuck, a verdict on each accept
 _Avoid_: result file, result contract
 
 **Stuck**:
-The outcome of a session that reports it cannot go on without a human; distinct from a ticket being blocked by another ticket.
+The outcome of a session that needs a human before its work can land: it reports it cannot go on, or reports any acceptance criterion unmet; distinct from a ticket being blocked by another ticket.
 _Avoid_: blocked
 
 **Integration branch**:
