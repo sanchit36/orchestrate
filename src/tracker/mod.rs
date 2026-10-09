@@ -3,6 +3,7 @@
 
 #[cfg(test)]
 pub(crate) mod contract;
+mod github;
 mod local_markdown;
 mod pausing;
 
@@ -73,6 +74,12 @@ pub fn open(config: &RepoConfig, top: &Path) -> Box<dyn Tracker> {
     match config.tracker.kind {
         TrackerKind::LocalMarkdown => Box::new(local_markdown::LocalMarkdown {
             root: top.join(&config.tracker.location),
+            ready: config.tracker.ready.clone(),
+            criteria_headings: config.criteria_headings.clone(),
+        }),
+        TrackerKind::GitHub => Box::new(github::GitHub {
+            gh: "gh".into(),
+            repo: config.tracker.location.clone(),
             ready: config.tracker.ready.clone(),
             criteria_headings: config.criteria_headings.clone(),
         }),
