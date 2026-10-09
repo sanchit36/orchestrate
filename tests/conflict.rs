@@ -101,12 +101,9 @@ fn a_failed_resolution_fails_the_ticket_with_cause_conflict_and_keeps_its_work()
     assert_eq!(s.git(&["show", &format!("{branch}:shared.txt")]), "b\n");
     let in_b = git_in(&wt, &["status", "--porcelain=v2", "--branch"]);
     assert!(!in_b.contains("rebase"), "{in_b}");
-    // The integration branch has only `a`, and its worktree is clean.
+    // The integration branch has only `a`; its worktree went at run end.
     assert_eq!(s.git(&["show", "int:shared.txt"]), "a\n");
-    assert_eq!(
-        git_in(&worktree(&s, "_integration"), &["status", "--porcelain"]),
-        ""
-    );
+    assert!(!worktree(&s, "_integration").exists());
 }
 
 fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
