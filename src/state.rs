@@ -74,6 +74,12 @@ pub fn repo_dir(machine: &MachineConfig, top: &Path) -> Result<PathBuf> {
 pub fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
     if let Some(dir) = &machine.state_dir {
         let Ok(in_home) = dir.strip_prefix("~") else {
+            if !dir.is_absolute() {
+                bail!(
+                    "state_dir `{}` must be absolute or start with `~/`",
+                    dir.display()
+                );
+            }
             return Ok(dir.clone());
         };
         let home = std::env::var_os("HOME").context("HOME is not set")?;

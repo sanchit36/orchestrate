@@ -121,6 +121,12 @@ fn a_state_dir_starting_with_a_tilde_is_under_home() {
     assert!(!s.repo.join("~").exists());
     let runs = s.repo_state(&s.home.join("runs-here")).join("runs");
     assert_eq!(std::fs::read_dir(runs).unwrap().count(), 1);
+
+    // A relative one would put worktrees inside whatever folder `run` started in.
+    s.machine_config("version = 1\nstate_dir = \"runs-here\"\n");
+    let err = s.run(&["run", "auth", "--branch", "int2"]).fails();
+    assert!(err.contains("state_dir"), "{err}");
+    assert!(!s.repo.join("runs-here").exists());
 }
 
 #[test]
