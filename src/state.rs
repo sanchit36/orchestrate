@@ -45,7 +45,12 @@ impl RunDirs {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         };
-        let lock = lock::acquire(&repo_dir, &id)?;
+        Self::open(&repo_dir, id)
+    }
+
+    /// Take the repo lock and (re)create the dirs of run `id` in `repo_dir`.
+    pub fn open(repo_dir: &Path, id: String) -> Result<Self> {
+        let lock = lock::acquire(repo_dir, &id)?;
         let run = repo_dir.join("runs").join(&id);
         let logs = run.join("logs");
         fs::create_dir_all(&logs).with_context(|| format!("creating {}", logs.display()))?;
@@ -154,6 +159,9 @@ pub struct TicketState {
     /// Criteria whose text changed on the tracker since dispatch, so were not ticked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mismatches: Vec<String>,
+    /// Its merge commit on the integration branch, once landed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged: Option<String>,
     /// Ticks and comments that failed or were skipped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writeback: Vec<String>,
