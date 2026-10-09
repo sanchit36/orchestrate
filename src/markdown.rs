@@ -68,7 +68,10 @@ fn link_target(s: &str) -> &str {
 
 pub struct Criterion {
     pub text: String,
-    #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the run report and ticking (#18)")
+    )]
     pub met: bool,
 }
 
