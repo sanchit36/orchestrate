@@ -4,6 +4,7 @@ use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -12,23 +13,23 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use crate::reporting::Events;
-use crate::state::{self, RunDirs};
+use crate::state::{self, RunDirs, Store};
 use crate::{config, lock, session};
 
 const POLL: Duration = Duration::from_millis(50);
 
 /// On SIGTERM (from `stop`), SIGINT (Ctrl-C) or SIGHUP (terminal closed): kill the
 /// sessions, mark the run stopped, let go of the lock and exit.
-pub fn stop_on_signal(dirs: &RunDirs) -> Result<()> {
+pub fn stop_on_signal(dirs: &RunDirs, store: Arc<Store>) -> Result<()> {
     let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP])?;
-    let (id, run, lock) = (dirs.id.clone(), dirs.run.clone(), dirs.lock.path.clone());
+    let (id, lock) = (dirs.id.clone(), dirs.lock.path.clone());
     let log = dirs.logs.join("run.log");
     thread::spawn(move || {
         if signals.forever().next().is_none() {
             return;
         }
         // Saves first, so the run loop cannot record the killed session as failed.
-        let marked = state::mark_stopped(&run);
+        let marked = store.stop();
         session::kill_all();
         if let Ok(mut events) = Events::open(&log) {
             match marked {

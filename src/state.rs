@@ -3,15 +3,17 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
-use serde::Serialize;
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::config::MachineConfig;
 use crate::git::git;
 use crate::lock::{self, Lock};
+use crate::report::Criterion;
 
 const VERSION: u32 = 1;
 
@@ -110,33 +112,57 @@ pub fn slug(s: &str) -> String {
 }
 
 /// `state.json`: the run and the latest tickets seen.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
     pub run_id: String,
     pub spec: String,
     pub branch: String,
+    /// When the run started, as a jiff timestamp.
+    pub started: String,
     /// `running`, `stopped` or `ended`.
     pub status: String,
+    /// Why a running run is paused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<String>,
     pub tickets: BTreeMap<String, TicketState>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct TicketState {
     pub title: String,
     pub outcome: String,
     /// Why a ticket failed, timed out, got stuck, or was held or skipped.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The criteria a stuck session reported unmet.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmet: Vec<String>,
-    /// Criteria edited since dispatch, which landing left unticked.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// When its session started, as a jiff timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<PathBuf>,
+    /// The criteria as the session reported them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub criteria: Vec<Criterion>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// The gates run on its landing attempt, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<GateResult>,
+    /// Criteria whose text changed on the tracker since dispatch, so were not ticked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mismatches: Vec<String>,
     /// Ticks and comments that failed or were skipped.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writeback: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GateResult {
+    pub name: String,
+    pub code: i32,
 }
 
 impl State {
@@ -146,32 +172,101 @@ impl State {
             run_id: run_id.into(),
             spec: spec.into(),
             branch: branch.into(),
+            started: jiff::Timestamp::now().to_string(),
             status: "running".into(),
+            paused: None,
             tickets: BTreeMap::new(),
         }
     }
 
-    pub fn save(&self, dirs: &RunDirs) -> Result<()> {
-        let _saving = SAVES.lock().unwrap();
-        write(&dirs.run, &serde_json::to_value(self)?)
+    /// The `state.json` in `run_dir`.
+    pub fn load(run_dir: &Path) -> Result<Self> {
+        let path = run_dir.join("state.json");
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    fn save(&self, run_dir: &Path) -> Result<()> {
+        let path = run_dir.join("state.json");
+        let tmp = run_dir.join("state.json.tmp");
+        fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
+        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
     }
 }
 
-/// Serialises `state.json` writes; a stop takes it for good.
-static SAVES: Mutex<()> = Mutex::new(());
-
-/// Mark the run in `run` stopped, and hold off every later save in this process.
-pub fn mark_stopped(run: &Path) -> Result<()> {
-    std::mem::forget(SAVES.lock().unwrap());
-    let path = run.join("state.json");
-    let mut state: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
-    state["status"] = "stopped".into();
-    write(run, &state)
+/// A run's state, saved to `state.json` after every change. Shareable between the
+/// run loop and the tracker's pause hook.
+pub struct Store {
+    run_dir: PathBuf,
+    state: Mutex<State>,
 }
 
-fn write(run: &Path, state: &serde_json::Value) -> Result<()> {
-    let path = run.join("state.json");
-    let tmp = run.join("state.json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(state)?)?;
-    fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+impl Store {
+    pub fn create(dirs: &RunDirs, state: State) -> Result<Self> {
+        state.save(&dirs.run)?;
+        Ok(Self {
+            run_dir: dirs.run.clone(),
+            state: Mutex::new(state),
+        })
+    }
+
+    /// Apply `f` and save.
+    pub fn update<R>(&self, f: impl FnOnce(&mut State) -> R) -> Result<R> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let r = f(&mut state);
+        state.save(&self.run_dir)?;
+        Ok(r)
+    }
+
+    /// Mark the run stopped and hold off every later save in this process: the caller
+    /// is about to exit.
+    pub fn stop(&self) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.status = "stopped".into();
+        let saved = state.save(&self.run_dir);
+        std::mem::forget(state);
+        saved
+    }
+}
+
+/// Every run of the repo whose state is in `repo_dir`, most recent first.
+pub fn runs(repo_dir: &Path) -> Result<Vec<State>> {
+    let dir = repo_dir.join("runs");
+    let entries = match fs::read_dir(&dir) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        r => r.with_context(|| format!("reading {}", dir.display()))?,
+    };
+    let mut runs = Vec::new();
+    for e in entries {
+        runs.push(State::load(&e?.path())?);
+    }
+    let started = |s: &State| s.started.parse::<jiff::Timestamp>().ok();
+    runs.sort_by_key(|s| std::cmp::Reverse(started(s)));
+    Ok(runs)
+}
+
+/// The run `--run` names: an exact id, a unique id prefix, a spec id (its most recent
+/// run), or, when omitted, the most recent run. `runs` is most recent first.
+pub fn resolve(runs: Vec<State>, arg: Option<&str>) -> Result<State> {
+    let Some(arg) = arg else {
+        return runs.into_iter().next().context("no runs in this repo");
+    };
+    let prefixed: Vec<&State> = runs.iter().filter(|s| s.run_id.starts_with(arg)).collect();
+    let pick = match prefixed.iter().position(|s| s.run_id == arg) {
+        Some(i) => Some(prefixed[i]),
+        None if prefixed.len() == 1 => Some(prefixed[0]),
+        None => runs.iter().find(|s| s.spec == arg),
+    };
+    let Some(id) = pick.map(|s| s.run_id.clone()) else {
+        if prefixed.is_empty() {
+            bail!("no run matches {arg}");
+        }
+        let ids: Vec<_> = prefixed.iter().map(|s| s.run_id.as_str()).collect();
+        bail!("{arg} matches several runs: {}", ids.join(", "));
+    };
+    Ok(runs
+        .into_iter()
+        .find(|s| s.run_id == id)
+        .expect("picked from runs"))
 }

@@ -8,6 +8,7 @@ use anyhow::Result;
 use crate::config::Gate;
 use crate::gate;
 use crate::git::{git, succeeds};
+use crate::state::GateResult;
 
 /// Where integration happens.
 pub struct Integration<'a> {
@@ -23,7 +24,8 @@ pub enum Landing {
 }
 
 /// Land the ticket branch checked out at `ticket_wt`. Gate output goes to
-/// `<logs>/<slug>.gate-<name>.log`.
+/// `<logs>/<slug>.gate-<name>.log`; each gate run's exit code goes to `results`.
+#[expect(clippy::too_many_arguments)]
 pub fn land(
     into: &Integration,
     ticket_wt: &Path,
@@ -32,6 +34,7 @@ pub fn land(
     logs: &Path,
     slug: &str,
     message: &str,
+    results: &mut Vec<GateResult>,
 ) -> Result<Landing> {
     if !succeeds(ticket_wt, &["rebase", "-q", into.branch])? {
         git(ticket_wt, &["rebase", "--abort"])?;
@@ -42,7 +45,7 @@ pub fn land(
         &["diff", "-z", "--name-only", into.branch, "HEAD"],
     )?;
     let changed: Vec<String> = changed.split_terminator('\0').map(String::from).collect();
-    if let Some(reason) = gate::run_all(gates, ticket_wt, &changed, logs, slug)? {
+    if let Some(reason) = gate::run_all(gates, ticket_wt, &changed, logs, slug, results)? {
         return Ok(Landing::Failed(reason));
     }
     git(

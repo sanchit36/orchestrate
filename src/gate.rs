@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::config::Gate;
+use crate::state::GateResult;
 
 /// A path glob: `*` stays within one path segment, `**` crosses them.
 pub fn glob(pattern: &str) -> Result<GlobMatcher> {
@@ -23,14 +24,17 @@ pub fn glob(pattern: &str) -> Result<GlobMatcher> {
 }
 
 /// Run `gates` in order in the ticket worktree `wt`, given the ticket's `changed`
-/// files. Each gate's output goes to `<logs>/<slug>.gate-<name>.log`. The first
-/// failure's reason, or `None` when every gate passed or was skipped.
+/// files. Each gate's output goes to `<logs>/<slug>.gate-<name>.log`, and each gate
+/// that runs gets one entry in `results`: its first failing exit code (-1 for a
+/// timeout), else 0. The first failure's reason, or `None` when every gate passed or
+/// was skipped.
 pub fn run_all(
     gates: &[Gate],
     wt: &Path,
     changed: &[String],
     logs: &Path,
     slug: &str,
+    results: &mut Vec<GateResult>,
 ) -> Result<Option<String>> {
     for gate in gates {
         let places = places(gate, wt, changed)?;
@@ -39,6 +43,7 @@ pub fn run_all(
         }
         let log = logs.join(format!("{slug}.gate-{}.log", gate.name));
         let out = File::create(&log).with_context(|| format!("creating {}", log.display()))?;
+        let mut failure = None;
         for place in places {
             let dir = wt.join(place);
             let status = sh(&gate.run, &dir, &out, gate.timeout)
@@ -48,20 +53,25 @@ pub fn run_all(
                 sh(teardown, &dir, &out, gate.timeout)
                     .with_context(|| format!("running teardown of gate {}", gate.name))?;
             }
-            match status {
-                Some(s) if s.success() => {}
+            failure = match status {
+                Some(s) if s.success() => continue,
                 Some(s) => {
                     let code = s.code().unwrap_or(-1);
-                    return Ok(Some(format!("gate {} exited {code}", gate.name)));
+                    Some((code, format!("gate {} exited {code}", gate.name)))
                 }
                 None => {
                     let after = gate.timeout;
-                    return Ok(Some(format!(
-                        "gate {} timed out after {after:?}",
-                        gate.name
-                    )));
+                    Some((-1, format!("gate {} timed out after {after:?}", gate.name)))
                 }
-            }
+            };
+            break;
+        }
+        results.push(GateResult {
+            name: gate.name.clone(),
+            code: failure.as_ref().map_or(0, |(code, _)| *code),
+        });
+        if let Some((_, reason)) = failure {
+            return Ok(Some(reason));
         }
     }
     Ok(None)

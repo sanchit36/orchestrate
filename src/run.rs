@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
@@ -12,7 +13,7 @@ use crate::integrator::{self, Integration, Landing};
 use crate::report::Report;
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
-use crate::state::{self, RunDirs, State, TicketState};
+use crate::state::{self, RunDirs, State, Store, TicketState};
 use crate::tracker::{self, Pausing, Ticket, Tracker};
 use crate::writeback::{self, Written};
 use crate::{control, planner, prompt, session, worktree};
@@ -41,9 +42,8 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let notify = machine.notifications != Some(false);
     let spec_slug = state::slug(spec_id);
     let mut events = Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug);
-    let mut state = State::new(&dirs.id, spec_id, branch);
-    state.save(&dirs)?;
-    control::stop_on_signal(&dirs)?;
+    let store = Arc::new(Store::create(&dirs, State::new(&dirs.id, spec_id, branch))?);
+    control::stop_on_signal(&dirs, Arc::clone(&store))?;
     let integration_wt = dirs.worktrees.join("_integration");
     worktree::integration(top, &integration_wt, branch)?;
     events.event(&format!(
@@ -57,6 +57,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         tracker::open(&config, &integration_wt),
         &config.tracker,
         Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug),
+        Box::new(|paused| store.update(|s| s.paused = paused)),
     );
     let into = Integration {
         worktree: &integration_wt,
@@ -76,55 +77,65 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
             branch,
             private,
         },
+        store: &store,
     };
     let mut tried = HashSet::new();
     loop {
         let reading = spec::reread(&tracker, spec_id, headings)?;
-        for t in reading.tickets.iter().map(|e| &e.ticket) {
-            let seen = state.tickets.entry(t.id.clone()).or_insert(TicketState {
-                title: t.title.clone(),
-                outcome: if t.finished { "finished" } else { "pending" }.into(),
-                reason: None,
-                unmet: Vec::new(),
-                mismatches: Vec::new(),
-                writeback: Vec::new(),
-            });
-            seen.title = t.title.clone();
-        }
+        store.update(|state| {
+            for t in reading.tickets.iter().map(|e| &e.ticket) {
+                let seen = state
+                    .tickets
+                    .entry(t.id.clone())
+                    .or_insert_with(|| TicketState {
+                        outcome: if t.finished { "finished" } else { "pending" }.into(),
+                        ..TicketState::default()
+                    });
+                seen.title = t.title.clone();
+            }
+        })?;
         let next = planner::plan(&reading)?
             .frontier
             .into_iter()
             .find(|t| !tried.contains(&t.id));
         let Some(ticket) = next else { break };
         tried.insert(ticket.id.clone());
-        set_outcome(&mut state, &ticket.id, Outcome::new("running"));
-        state.save(&dirs)?;
+        run.ticket(&ticket.id, |t| {
+            t.outcome = "running".into();
+            t.started = Some(jiff::Timestamp::now().to_string());
+        })?;
         let outcome = run.work(&reading, ticket, &mut events)?;
         let kind = outcome.kind;
         events.notify(&format!("{} {}: {kind}", ticket.id, ticket.title));
-        set_outcome(&mut state, &ticket.id, outcome);
-        if kind != "finished" {
-            block_dependents(&mut state, &reading, &ticket.id, kind, &mut events);
-        }
-        state.save(&dirs)?;
+        store.update(|state| {
+            set_outcome(state, &ticket.id, outcome);
+            if kind != "finished" {
+                block_dependents(state, &reading, &ticket.id, kind, &mut events);
+            }
+        })?;
     }
 
-    state.status = "ended".into();
-    state.save(&dirs)?;
-    let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
+    let (counts, problems) = store.update(|state| {
+        state.status = "ended".into();
+        let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
+        let counts = (
+            count("finished"),
+            count("failed") + count("timeout"),
+            count("stuck"),
+        );
+        let problems: Vec<String> = (state.tickets.iter())
+            .flat_map(|(id, t)| t.writeback.iter().map(move |p| format!("ticket {id}: {p}")))
+            .collect();
+        (counts, problems)
+    })?;
     let ended = format!(
         "run {} ended: {} finished, {} failed, {} stuck; integration branch {branch}",
-        dirs.id,
-        count("finished"),
-        count("failed") + count("timeout"),
-        count("stuck"),
+        dirs.id, counts.0, counts.1, counts.2,
     );
     events.event(&ended);
     events.notify(&ended);
-    for (id, t) in &state.tickets {
-        for problem in &t.writeback {
-            events.event(&format!("ticket {id}: {problem}"));
-        }
+    for problem in &problems {
+        events.event(problem);
     }
     events.event(&format!("push it with: git push -u origin {branch}"));
     Ok(())
@@ -205,9 +216,16 @@ struct Run<'a> {
     into: &'a Integration<'a>,
     tracker: &'a dyn Tracker,
     cx: writeback::Context<'a>,
+    store: &'a Store,
 }
 
 impl Run<'_> {
+    /// Change ticket `id`'s recorded state.
+    fn ticket(&self, id: &str, f: impl FnOnce(&mut TicketState)) -> Result<()> {
+        self.store.update(|s| s.tickets.get_mut(id).map(f))?;
+        Ok(())
+    }
+
     /// Work one ticket and write its outcome back to the tracker.
     fn work(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
         let mut outcome = self.attempt(reading, ticket, events)?;
@@ -225,6 +243,7 @@ impl Run<'_> {
         let wt = self.dirs.worktrees.join(&slug);
         let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
         worktree::create(self.top, &wt, &branch, self.into.branch)?;
+        self.ticket(&ticket.id, |t| t.worktree = Some(wt.clone()))?;
         events.event(&format!("ticket {} started: {}", ticket.id, ticket.title));
         let prepare_log = self.dirs.logs.join(format!("{slug}.prepare.log"));
         if let Some(reason) = worktree::prepare(self.top, &wt, self.config, &prepare_log)? {
@@ -250,7 +269,14 @@ impl Run<'_> {
                 &format!("{}..HEAD", self.into.branch),
             ],
         )?;
-        let failure = match Report::read(&wt) {
+        let report = Report::read(&wt);
+        if let Ok(r) = &report {
+            self.ticket(&ticket.id, |t| {
+                t.criteria = r.acceptance_criteria.clone();
+                t.notes = r.notes.clone();
+            })?;
+        }
+        let failure = match report {
             _ if code != 0 => Some(format!("session exited {code}")),
             Err(e) => Some(format!("{e:#}")),
             Ok(report) if !report.is_done() => return Ok(stuck(ticket, report, events)),
@@ -260,17 +286,21 @@ impl Run<'_> {
         let landing = match failure {
             Some(reason) => Landing::Failed(reason),
             None => {
+                self.ticket(&ticket.id, |t| t.outcome = "integrating".into())?;
                 let message = format!("Merge ticket {}: {}", ticket.id, ticket.title);
-                let gates = &self.config.gates;
-                integrator::land(
+                let mut results = Vec::new();
+                let landing = integrator::land(
                     self.into,
                     &wt,
                     &branch,
-                    gates,
+                    &self.config.gates,
                     &self.dirs.logs,
                     &slug,
                     &message,
-                )?
+                    &mut results,
+                )?;
+                self.ticket(&ticket.id, |t| t.gates = results)?;
+                landing
             }
         };
         match landing {
