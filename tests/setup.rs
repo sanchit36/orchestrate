@@ -58,6 +58,7 @@ fn reads_the_tracker_guide_and_triage_labels_and_never_writes_them_or_the_tracke
     assert_eq!((guide.as_str(), labels.as_str()), (GUIDE, LABELS));
     assert!(!gh.closed(12), "verification never marks a ticket finished");
     let calls = s.calls("gh");
+    assert!(!calls.is_empty(), "the fake gh recorded no call");
     let writes = |c: &&String| c.contains("-X PATCH") || c.contains("-X POST");
     assert!(!calls.iter().any(|c| writes(&c)), "{calls:?}");
 }

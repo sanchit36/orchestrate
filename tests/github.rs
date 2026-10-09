@@ -39,6 +39,7 @@ fn plan_reads_sub_issues_labels_and_both_blocker_forms() {
 
     assert_eq!(out, "Spec 10: Login rework\n\nFrontier:\n  12  Build API\n");
     let calls = s.calls("gh");
+    assert!(!calls.is_empty(), "the fake gh recorded no call");
     assert!(calls.iter().all(|c| c.starts_with("api ")), "{calls:?}");
 }
 
@@ -60,6 +61,7 @@ fn a_run_lands_the_ready_tickets_and_closes_ticks_and_comments_them() {
     assert!(gh.comments(14).is_empty());
     // Only `gh api` is used, so `gh` older than 2.94 works.
     let calls = s.calls("gh");
+    assert!(!calls.is_empty(), "the fake gh recorded no call");
     assert!(calls.iter().all(|c| c.starts_with("api ")), "{calls:?}");
 }
 
