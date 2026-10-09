@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::config::MachineConfig;
 use crate::git::git;
+use crate::lock::{self, Lock};
 
 const VERSION: u32 = 1;
 
@@ -19,18 +21,21 @@ pub struct RunDirs {
     pub run: PathBuf,
     pub logs: PathBuf,
     pub worktrees: PathBuf,
+    pub lock: Lock,
 }
 
 impl RunDirs {
-    /// Create the per-repo dir (with `repo.toml`) and the run dirs for a new run of `spec`.
+    /// Create the per-repo dir (with `repo.toml`), take the repo lock, and create the
+    /// run dirs for a new run of `spec`.
     pub fn create(machine: &MachineConfig, top: &Path, spec: &str) -> Result<Self> {
-        let repo_dir = state_root(machine)?.join(repo_dir_name(top)?);
+        let repo_dir = repo_dir(machine, top)?;
         fs::create_dir_all(&repo_dir)
             .with_context(|| format!("creating {}", repo_dir.display()))?;
         let path = toml::Value::String(top.to_string_lossy().into_owned());
         fs::write(repo_dir.join("repo.toml"), format!("path = {path}\n"))?;
         let now = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
         let id = format!("{}-{now}", slug(spec));
+        let lock = lock::acquire(&repo_dir, &id)?;
         let run = repo_dir.join("runs").join(&id);
         let logs = run.join("logs");
         fs::create_dir_all(&logs).with_context(|| format!("creating {}", logs.display()))?;
@@ -39,8 +44,14 @@ impl RunDirs {
             id,
             run,
             logs,
+            lock,
         })
     }
+}
+
+/// The per-repo state dir: `<root>/<repo-folder>-<hash>`.
+pub fn repo_dir(machine: &MachineConfig, top: &Path) -> Result<PathBuf> {
+    Ok(state_root(machine)?.join(repo_dir_name(top)?))
 }
 
 /// `state_dir`, else `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate`.
@@ -97,6 +108,8 @@ pub struct State {
     pub run_id: String,
     pub spec: String,
     pub branch: String,
+    /// `running`, `stopped` or `ended`.
+    pub status: String,
     pub tickets: BTreeMap<String, TicketState>,
 }
 
@@ -113,14 +126,32 @@ impl State {
             run_id: run_id.into(),
             spec: spec.into(),
             branch: branch.into(),
+            status: "running".into(),
             tickets: BTreeMap::new(),
         }
     }
 
     pub fn save(&self, dirs: &RunDirs) -> Result<()> {
-        let path = dirs.run.join("state.json");
-        let tmp = dirs.run.join("state.json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
-        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+        let _saving = SAVES.lock().unwrap();
+        write(&dirs.run, &serde_json::to_value(self)?)
     }
+}
+
+/// Serialises `state.json` writes; a stop takes it for good.
+static SAVES: Mutex<()> = Mutex::new(());
+
+/// Mark the run in `run` stopped, and hold off every later save in this process.
+pub fn mark_stopped(run: &Path) -> Result<()> {
+    std::mem::forget(SAVES.lock().unwrap());
+    let path = run.join("state.json");
+    let mut state: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    state["status"] = "stopped".into();
+    write(run, &state)
+}
+
+fn write(run: &Path, state: &serde_json::Value) -> Result<()> {
+    let path = run.join("state.json");
+    let tmp = run.join("state.json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(state)?)?;
+    fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
 }

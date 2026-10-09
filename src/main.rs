@@ -1,6 +1,8 @@
 mod config;
+mod control;
 mod git;
 mod integrator;
+mod lock;
 mod markdown;
 mod planner;
 mod prompt;
@@ -13,6 +15,7 @@ mod state;
 mod tracker;
 mod worktree;
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -41,6 +44,15 @@ enum Cmd {
         /// The integration branch: created from `HEAD`, or reused if it exists.
         #[arg(long)]
         branch: String,
+        /// Keep running in the background after the terminal closes.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stop the live run: kill its sessions and mark it stopped.
+    Stop {
+        /// The run to stop: its id or an id prefix.
+        #[arg(long)]
+        run: Option<String>,
     },
 }
 
@@ -48,12 +60,21 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Plan { spec } => plan(&spec),
-        Cmd::Run { spec, branch } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch)),
+        Cmd::Run {
+            spec,
+            branch,
+            detach,
+        } => git_toplevel().and_then(|top| match detach {
+            true => control::detach(&top, &spec, &branch),
+            false => run::run(&top, &spec, &branch),
+        }),
+        Cmd::Stop { run } => git_toplevel().and_then(|top| control::stop(&top, run.as_deref())),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("orchestrate: {e:#}");
+            // A detached run's stderr may be gone; a failed write must not panic.
+            let _ = writeln!(std::io::stderr(), "orchestrate: {e:#}");
             ExitCode::FAILURE
         }
     }

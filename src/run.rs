@@ -14,7 +14,7 @@ use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, RunDirs, State, TicketState};
 use crate::tracker::{self, Ticket, Tracker};
-use crate::{planner, prompt, session, worktree};
+use crate::{control, planner, prompt, session, worktree};
 
 pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let (config, machine) = config::load(top)?;
@@ -33,6 +33,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let mut events = Events::open(&dirs.logs.join("run.log"))?;
     let mut state = State::new(&dirs.id, spec_id, branch);
     state.save(&dirs)?;
+    control::stop_on_signal(&dirs)?;
     let integration_wt = dirs.worktrees.join("_integration");
     worktree::integration(top, &integration_wt, branch)?;
     events.event(&format!(
@@ -74,6 +75,8 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         set_outcome(&mut state, &dirs, &ticket.id, outcome)?;
     }
 
+    state.status = "ended".into();
+    state.save(&dirs)?;
     let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
     events.event(&format!(
         "run {} ended: {} finished, {} failed, {} stuck; integration branch {branch}",
