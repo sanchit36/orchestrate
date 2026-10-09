@@ -488,8 +488,8 @@ pub fn gate_lines(gates: &[Gate], results: &[GateResult]) -> Vec<String> {
     gates
         .iter()
         .map(|g| match results.iter().find(|r| r.name == g.name) {
-            Some(r) if r.code == 0 => format!("{}: passed", g.name),
-            Some(r) => format!("{}: exited {}", g.name, r.code),
+            Some(r) if r.code == 0 && !r.timed_out => format!("{}: passed", g.name),
+            Some(r) => format!("{}: {}", g.name, r.ended()),
             None => format!("{}: skipped", g.name),
         })
         .collect()

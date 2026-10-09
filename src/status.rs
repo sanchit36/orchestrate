@@ -101,7 +101,7 @@ fn detail(id: &str, t: &TicketState, logs: &Path) -> Result<String> {
         out.push_str("Gates:\n");
     }
     for g in &t.gates {
-        let _ = writeln!(out, "  {}: exited {}", g.name, g.code);
+        let _ = writeln!(out, "  {}: {}", g.name, g.ended());
     }
     if !t.mismatches.is_empty() {
         out.push_str("Mismatches:\n");

@@ -190,7 +190,7 @@ fn a_gate_with_both_dirs_and_cwd_or_a_bad_glob_is_a_config_error() {
 #[test]
 fn a_gate_past_its_timeout_fails_and_still_runs_its_teardown() {
     let s = ticket_with_gates(
-        "[[gates]]\nname = \"slow\"\nrun = '(sleep 2; echo late >> {GATES}) & sleep 30'\n\
+        "[[gates]]\nname = \"slow\"\nrun = 'sleep 30 & echo $! > {GATES}.pid; sleep 30'\n\
          timeout = \"1s\"\nteardown = 'echo torn >> {GATES}'\n",
         &["a.txt"],
     );
@@ -199,14 +199,17 @@ fn a_gate_past_its_timeout_fails_and_still_runs_its_teardown() {
     s.run(&["run", "auth", "--branch", "int"]).ok();
 
     assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
-    // The gate's whole process group was killed, so its background job never writes.
-    std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(gate_lines(&s), ["torn"]);
+    // The gate's whole process group was killed, its background job too.
+    let pid = fs::read_to_string(s.bin.join("gates.pid")).unwrap();
+    common::wait_until("gate job killed", || !common::alive(pid.trim()));
     let log = run_log(&s);
     assert!(
         log.contains("ticket a failed: gate slow timed out after 1s"),
         "{log}"
     );
+    let status = s.run(&["status", "a"]).ok();
+    assert!(status.contains("Gates:\n  slow: timed out\n"), "{status}");
 }
 
 #[test]

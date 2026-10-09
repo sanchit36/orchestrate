@@ -170,7 +170,21 @@ pub struct TicketState {
 #[derive(Serialize, Deserialize)]
 pub struct GateResult {
     pub name: String,
+    /// Its exit code; -1 when killed by a signal or timed out.
     pub code: i32,
+    /// Whether it was killed for outliving its timeout.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
+}
+
+impl GateResult {
+    /// `timed out` or `exited <code>`.
+    pub fn ended(&self) -> String {
+        match self.timed_out {
+            true => "timed out".into(),
+            false => format!("exited {}", self.code),
+        }
+    }
 }
 
 impl State {

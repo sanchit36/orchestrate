@@ -42,7 +42,11 @@ pub fn run_all(
         ran = true;
         let log = logs.join(format!("{slug}.gate-{}.log", gate.name));
         let out = File::create(&log).with_context(|| format!("creating {}", log.display()))?;
-        let mut failure = None;
+        let mut result = GateResult {
+            name: gate.name.clone(),
+            code: 0,
+            timed_out: false,
+        };
         for place in places {
             let dir = wt.join(place);
             let status = sh(&gate.run, &dir, &out, gate.timeout)
@@ -52,25 +56,21 @@ pub fn run_all(
                 sh(teardown, &dir, &out, gate.timeout)
                     .with_context(|| format!("running teardown of gate {}", gate.name))?;
             }
-            failure = match status {
+            match status {
                 Some(s) if s.success() => continue,
-                Some(s) => {
-                    let code = s.code().unwrap_or(-1);
-                    Some((code, format!("gate {} exited {code}", gate.name)))
-                }
-                None => {
-                    let after = gate.timeout;
-                    Some((-1, format!("gate {} timed out after {after:?}", gate.name)))
-                }
-            };
+                Some(s) => result.code = s.code().unwrap_or(-1),
+                None => (result.code, result.timed_out) = (-1, true),
+            }
             break;
         }
-        results.push(GateResult {
-            name: gate.name.clone(),
-            code: failure.as_ref().map_or(0, |(code, _)| *code),
-        });
-        if let Some((_, reason)) = failure {
-            return Ok(Some(reason));
+        let failure = match &result {
+            r if r.timed_out => Some(format!("timed out after {:?}", gate.timeout)),
+            r if r.code != 0 => Some(format!("exited {}", r.code)),
+            _ => None,
+        };
+        results.push(result);
+        if let Some(failure) = failure {
+            return Ok(Some(format!("gate {} {failure}", gate.name)));
         }
     }
     Ok((!ran).then(|| "no gate matched its change".to_string()))
