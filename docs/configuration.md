@@ -31,6 +31,7 @@ See [trackers.md](trackers.md) for what each kind reads and writes.
 | `retry_delay` | `"2s"` | The wait between the quick retries of a failed tracker operation (three tries in all). |
 | `probe_backoff` | `"60s"` | When the tracker keeps failing the run pauses; this is the first wait between probes. It doubles after each failed probe. |
 | `probe_backoff_max` | `"5m"` | The longest wait between probes of a paused run. |
+| `timeout` | `"60s"` | How long one `gh` call or command template may run before its process group is killed and the operation fails. |
 | `commands` | none | The `[tracker.commands]` templates. Required with `kind = "commands"` and refused with any other kind. |
 
 ### `tracker.commands`
@@ -75,6 +76,8 @@ Gates run in the order listed; exit 0 passes, and the first failure stops the ti
 | `teardown` | none | A command run after the gate in the same directory, even after a failure or timeout. Its exit status does not decide the gate. |
 
 A ticket that changes no file matching a gate's `paths` skips that gate.
+A gate without `paths` and without `dirs` always runs, even on a ticket whose commits change no file.
+Nothing lands unchecked: a ticket on which every gate was skipped fails with `no gate matched its change`.
 
 ### `session`
 
@@ -100,11 +103,12 @@ Default: none.
 
 A shell command run in each fresh worktree before its session starts, such as `npm ci`.
 Its output goes to the ticket's `<ticket>.prepare.log` in the run logs, and a non-zero exit fails the ticket.
+It shares the session's `timeout`: past it, its process group is killed and the ticket fails.
 Git submodules are initialised before it runs.
 
 ### `protected_branches`
 
-Default: the remote `origin`'s default branch, or none when there is no `origin`.
+Default: the remote `origin`'s default branch; without one (no `origin`, or an `origin` with no default branch), the branch checked out in your checkout when the run starts.
 
 Branches a run never writes.
 `run --branch` refuses a protected branch as its integration branch.
@@ -125,6 +129,7 @@ ready = "ready-for-agent"
 retry_delay = "2s"
 probe_backoff = "60s"
 probe_backoff_max = "5m"
+timeout = "60s"
 
 [[gates]]
 name = "test"
@@ -173,7 +178,7 @@ run = "make test"
 | --- | --- | --- |
 | `max_parallel` | `"auto"` | The default for `run --max-parallel`: `"auto"` (from the width of the ticket graph and the CPU cores) or a number above 0. |
 | `notifications` | `true` | Desktop notifications for the events of a run. |
-| `state_dir` | `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate` | Where runs keep their state, logs and worktrees. Give an absolute path; `~` is not expanded. |
+| `state_dir` | `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate` | Where runs keep their state, logs and worktrees. An absolute path, or one starting with `~/` for your home folder. |
 
 ### Example
 
@@ -189,4 +194,6 @@ state_dir = "/Volumes/scratch/orchestrate"
 Orchestrate also keeps, without you editing them:
 
 - `~/.config/orchestrate/approvals.toml`: the command templates you approved on this machine (see [trackers.md](trackers.md#approval)).
+- One line, `/.orchestrate-result.json`, in your repo's `.git/info/exclude`, added once so a session's report is never committed.
+  Git has no exclude file per worktree, so this is the only place orchestrate writes inside your repo.
 - Under the state dir, one folder per repo (`<repo-folder>-<hash>`) holding `runs/<run-id>/state.json`, the logs in `runs/<run-id>/logs/` (`run.log` and one file per session, gate and preparation) and the worktrees in `worktrees/<run-id>/`.

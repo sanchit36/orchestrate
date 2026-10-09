@@ -29,6 +29,12 @@ fn a_two_ticket_chain_lands_both_tickets_in_order_as_no_ff_merges() {
     s.git(&["cat-file", "-e", "int:a.txt"]);
     s.git(&["cat-file", "-e", "int:b.txt"]);
     assert_eq!(s.calls("claude").len(), 2);
+    // The report is git-excluded once for the repo, however many worktrees there were.
+    let exclude = std::fs::read_to_string(s.repo.join(".git/info/exclude")).unwrap();
+    let lines = exclude
+        .lines()
+        .filter(|l| *l == "/.orchestrate-result.json");
+    assert_eq!(lines.count(), 1, "{exclude}");
 }
 
 #[test]
@@ -109,6 +115,24 @@ fn a_ticket_works_in_its_own_worktree_and_branch_under_the_state_dir() {
         .collect();
     beside.sort();
     assert_eq!(beside, ["bin", "home", "repo"]);
+}
+
+#[test]
+fn a_state_dir_starting_with_a_tilde_is_under_home() {
+    let s = chain();
+    s.machine_config("version = 1\nnotifications = false\nstate_dir = \"~/runs-here\"\n");
+
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(!s.repo.join("~").exists());
+    let runs = s.repo_state(&s.home.join("runs-here")).join("runs");
+    assert_eq!(std::fs::read_dir(runs).unwrap().count(), 1);
+
+    // A relative one would put worktrees inside whatever folder `run` started in.
+    s.machine_config("version = 1\nnotifications = false\nstate_dir = \"runs-here\"\n");
+    let err = s.run(&["run", "auth", "--branch", "int2"]).fails();
+    assert!(err.contains("state_dir"), "{err}");
+    assert!(!s.repo.join("runs-here").exists());
 }
 
 #[test]
@@ -250,6 +274,40 @@ fn landed_ticket_worktrees_branches_and_the_integration_worktree_are_removed() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn the_run_end_counts_only_tickets_the_run_finished() {
+    let s = chain();
+    s.ticket("auth", "e", "Done before", "done", &[]);
+    s.commit_all();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(
+        out.contains("ended: 2 finished, 0 failed, 0 stuck"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_run_whose_integration_worktree_cannot_be_removed_still_ends_with_its_summary() {
+    let s = Scratch::new();
+    // A locked worktree refuses `git worktree remove --force`.
+    s.local_markdown_tracker_with_gate("git worktree lock ../_integration || true");
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "a", "Add schema", "ready-for-agent", &[]);
+    s.commit_all();
+    s.claude_lands();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(
+        out.contains("could not remove the integration worktree"),
+        "{out}"
+    );
+    assert!(out.contains("ended: 1 finished"), "{out}");
+    assert!(out.contains("git push -u origin int"), "{out}");
 }
 
 #[test]

@@ -125,6 +125,35 @@ fn resume_refuses_while_the_run_is_live() {
 }
 
 #[test]
+fn a_ticket_whose_merge_went_missing_skips_its_dependents() {
+    let s = Scratch::new();
+    s.local_markdown_tracker_with_gate("true");
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "a", "Add schema", "ready-for-agent", &[]);
+    s.ticket("auth", "b", "Build API", "needs-triage", &["a"]);
+    s.commit_all();
+    s.claude_lands();
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+    edit_state(&s, |st| st["status"] = "stopped".into());
+    let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
+    integration_git(
+        &s,
+        &["reset", "-q", "--hard", &format!("{}^1", merge.trim())],
+    );
+
+    let out = s.run(&["resume"]).ok();
+
+    let st = state(&s);
+    assert_eq!(st["tickets"]["a"]["outcome"], "failed", "{st}");
+    assert_eq!(st["tickets"]["b"]["outcome"], "skipped", "{st}");
+    assert_eq!(st["tickets"]["b"]["reason"], "blocked by failed a");
+    assert!(
+        out.contains("ticket b skipped: blocked by failed a"),
+        "{out}"
+    );
+}
+
+#[test]
 fn a_ticket_whose_merge_is_missing_from_the_integration_branch_becomes_failed() {
     let s = landed();
     let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
@@ -188,6 +217,50 @@ fn a_landed_ticket_not_yet_marked_finished_is_marked_before_anything_new_starts(
     let log = run_log(&s);
     let marked = log.rfind("ticket a finished").expect(&log);
     assert!(marked < log.find("ticket b started").unwrap(), "{log}");
+}
+
+#[test]
+fn marking_a_landed_ticket_on_resume_ticks_only_criteria_its_report_marked_met() {
+    let s = landed();
+    let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
+    integration_git(&s, &["reset", "-q", "--hard", merge.trim()]);
+    edit_state(&s, |st| {
+        st["tickets"]["a"]["outcome"] = "integrating".into()
+    });
+    // A criterion added after the session reported.
+    let a = worktrees(&s).join("_integration/specs/auth/a.md");
+    let body = fs::read_to_string(&a).unwrap() + "- [ ] it scales\n";
+    fs::write(&a, body).unwrap();
+    integration_git(&s, &["commit", "-q", "-am", "new criterion"]);
+
+    s.run(&["resume"]).ok();
+
+    let a = s.git(&["show", "int:specs/auth/a.md"]);
+    assert!(a.contains("- [x] it works\n"), "{a}");
+    assert!(a.contains("- [ ] it scales\n"), "{a}");
+}
+
+#[test]
+fn resume_refuses_like_run_without_a_gate_or_onto_a_protected_branch() {
+    for (config, want) in [
+        (
+            "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n",
+            "no gate configured",
+        ),
+        (
+            "version = 1\nprotected_branches = [\"int\"]\n\n[tracker]\nkind = \"local-markdown\"\n\
+             location = \"specs\"\n\n[[gates]]\nname = \"check\"\nrun = \"true\"\n",
+            "`int` is a protected branch",
+        ),
+    ] {
+        let s = landed();
+        s.repo_config(config);
+
+        let err = s.run(&["resume"]).fails();
+
+        assert!(err.contains(want), "{err}");
+        assert_eq!(state(&s)["status"], "stopped");
+    }
 }
 
 #[test]

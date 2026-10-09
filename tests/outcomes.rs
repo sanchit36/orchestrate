@@ -103,6 +103,34 @@ fn a_done_report_with_an_unmet_criterion_is_stuck_with_the_unmet_criteria_record
 }
 
 #[test]
+fn a_done_report_leaving_out_a_criterion_is_stuck_with_that_criterion_unmet() {
+    let s = Scratch::new();
+    spec(&s, "");
+    s.write(
+        "specs/auth/a.md",
+        "# Add schema\n\nStatus: ready-for-agent\n\n## Acceptance criteria\n\n\
+         - [ ] it works\n- [ ] it migrates\n",
+    );
+    s.commit_all();
+    claude(&s, &format!("a) {COMMIT}; {};;", report("done", true, "")));
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    let st = state(&s);
+    assert_eq!(st["tickets"]["a"]["outcome"], "stuck", "{st}");
+    assert_eq!(
+        st["tickets"]["a"]["unmet"],
+        serde_json::json!(["it migrates"])
+    );
+    assert!(
+        out.contains("ticket a stuck: unmet: it migrates\n"),
+        "{out}"
+    );
+    assert!(!merged(&s).contains("Add schema"));
+    assert_eq!(s.calls("gate").len(), 1, "only c is gated");
+}
+
+#[test]
 fn a_missing_or_malformed_report_no_new_commits_or_a_non_zero_exit_is_failed() {
     let done = report("done", true, "");
     for (arm, reason) in [
@@ -200,6 +228,34 @@ fn the_session_timeout_is_a_duration_string() {
 }
 
 #[test]
+fn an_orchestrator_that_errors_kills_its_running_sessions_instead_of_waiting() {
+    let s = Scratch::new();
+    spec(&s, "");
+    let pid = s.repo.parent().unwrap().join("c.pid");
+    let pid_path = pid.display();
+    // `a` breaks its own worktree once `c` is running, so the run errors.
+    claude(
+        &s,
+        &format!(
+            "a) until [ -s '{pid_path}' ]; do sleep 0.05; done; rm .git;;\n\
+             c) sleep 30 & echo $! > '{pid_path}'; wait;;"
+        ),
+    );
+    let started = Instant::now();
+
+    s.run(&["run", "auth", "--branch", "int", "--max-parallel", "2"])
+        .fails();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    let pid = std::fs::read_to_string(pid).unwrap();
+    assert!(!alive(pid.trim()), "session {pid} survived");
+}
+
+#[test]
 fn an_interrupted_orchestrator_kills_its_sessions() {
     for signal in ["INT", "TERM", "HUP"] {
         let s = Scratch::new();
@@ -257,4 +313,36 @@ fn alive(pid: &str) -> bool {
         std::thread::sleep(Duration::from_millis(50));
     }
     true
+}
+
+#[test]
+fn changes_the_session_left_uncommitted_fail_the_ticket_before_any_gate_or_conflict_session() {
+    let done = report("done", true, "");
+    for (arm, left) in [
+        (
+            format!("a) {COMMIT}; echo x > extra.txt; {done};;"),
+            "extra.txt",
+        ),
+        (
+            format!("a) {COMMIT}; echo more >> a.txt; {done};;"),
+            "a.txt",
+        ),
+    ] {
+        let s = Scratch::new();
+        spec(&s, "");
+        claude(&s, &arm);
+
+        let out = s
+            .run(&["run", "auth", "--branch", "int", "--max-parallel", "1"])
+            .ok();
+
+        let st = state(&s);
+        assert_eq!(st["tickets"]["a"]["outcome"], "failed", "{arm}: {st}");
+        let reason = format!("uncommitted changes in the worktree: {left}");
+        assert_eq!(st["tickets"]["a"]["reason"], reason.as_str(), "{arm}");
+        assert!(out.contains(&format!("ticket a failed: {reason}")), "{out}");
+        assert_eq!(s.calls("gate").len(), 1, "{arm}: only c is gated");
+        assert_eq!(s.calls("claude").len(), 2, "{arm}: no conflict session");
+        assert!(!merged(&s).contains("Add schema"), "{arm}");
+    }
 }

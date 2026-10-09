@@ -91,6 +91,23 @@ fn the_default_protection_follows_the_remotes_head_not_the_local_branch_name() {
 }
 
 #[test]
+fn without_an_origin_the_checked_out_branch_is_protected() {
+    let s = Scratch::new();
+    s.local_markdown_tracker_with_gate("true");
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "a", "Add schema", "ready-for-agent", &[]);
+    s.commit_all();
+    s.claude_lands();
+    s.git(&["checkout", "-q", "-b", "trunk"]);
+    let before = s.git(&["rev-parse", "main"]);
+
+    let err = s.run(&["run", "auth", "--branch", "trunk"]).fails();
+
+    assert_refused_untouched(&s, &err, "trunk", &before);
+    s.run(&["run", "auth", "--branch", "main"]).ok();
+}
+
+#[test]
 fn configured_protected_branches_replace_the_default() {
     let s = spec_with_remote();
     s.repo_config(

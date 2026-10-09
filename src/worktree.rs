@@ -4,12 +4,12 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 
 use crate::config::RepoConfig;
 use crate::git::{git, succeeds};
+use crate::process;
 use crate::report::REPORT_FILE;
 
 /// Check out `branch` at `path`, creating the branch from `HEAD` if it does not exist.
@@ -83,18 +83,15 @@ pub fn prepare(top: &Path, wt: &Path, config: &RepoConfig, log: &Path) -> Result
         return Ok(None);
     };
     let out = File::create(log).with_context(|| format!("creating {}", log.display()))?;
-    let status = Command::new("sh")
-        .args(["-c", cmd])
-        .current_dir(wt)
-        .stdout(out.try_clone()?)
-        .stderr(out)
-        .status()
-        .context("running prepare")?;
-    if !status.success() {
-        let code = status.code().unwrap_or(-1);
-        return Ok(Some(format!("prepare exited {code}")));
-    }
-    Ok(None)
+    // Bounded like the session it prepares for.
+    let timeout = config.session.timeout;
+    Ok(
+        match process::sh(cmd, wt, &out, timeout).context("running prepare")? {
+            Some(status) if status.success() => None,
+            Some(status) => Some(format!("prepare exited {}", status.code().unwrap_or(-1))),
+            None => Some(format!("prepare timed out after {timeout:?}")),
+        },
+    )
 }
 
 /// Git has no per-worktree exclude file, so the report is excluded in the shared

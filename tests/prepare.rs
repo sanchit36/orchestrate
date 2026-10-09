@@ -84,6 +84,27 @@ fn a_prepare_failure_is_its_own_cause_with_output_in_the_prepare_log() {
 }
 
 #[test]
+fn a_prepare_past_the_session_timeout_is_killed_and_fails_the_ticket() {
+    let s = one_ticket("prepare = \"sleep 30\"");
+    let config = std::fs::read_to_string(s.repo.join(".orchestrate/config.toml")).unwrap();
+    s.repo_config(&format!("{config}\n[session]\ntimeout = \"1s\"\n"));
+    s.commit_all();
+    claude_looks(&s, "true");
+    let start = std::time::Instant::now();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    assert!(
+        out.contains("ticket a failed: prepare timed out after 1s"),
+        "{out}"
+    );
+    assert!(s.calls("claude").is_empty());
+    let status = s.run(&["status"]).ok();
+    assert!(status.contains("failed (prepare)"), "{status}");
+}
+
+#[test]
 fn submodules_are_initialised_when_the_repo_has_them() {
     let s = one_ticket("");
     let lib = s.repo.parent().unwrap().join("lib");
@@ -112,4 +133,15 @@ fn the_prompt_carries_no_dependency_advice() {
     for word in ["deps-installed", "prepare", "install", "npm", "submodule"] {
         assert!(!prompt.contains(word), "{word} in {prompt}");
     }
+}
+
+#[test]
+fn seeded_and_prepared_files_left_untracked_do_not_stop_the_ticket_landing() {
+    let s = one_ticket("seed_files = [\".env\"]\nprepare = \"touch deps-installed\"");
+    s.write(".env", "SECRET=1\n");
+    s.claude_lands();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(out.contains("ticket a finished"), "{out}");
 }

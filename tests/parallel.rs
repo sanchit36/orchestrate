@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::Scratch;
 
 const LAND: &str = r#"echo "$slug" > "$slug.txt"; git add "$slug.txt"; git commit -q -m "work $slug"
-printf '{"status":"done","acceptance_criteria":[],"notes":""}' > .orchestrate-result.json"#;
+printf '{"status":"done","acceptance_criteria":[{"text":"it works","met":true,"evidence":"ok"}],"notes":""}' > .orchestrate-result.json"#;
 
 /// Repo config with a short tracker backoff and a gate running `gate`.
 fn config(s: &Scratch, gate: &str) {
@@ -43,13 +43,16 @@ fn claude(s: &Scratch, before: &str) {
 
 /// Sessions that wait (up to 10 s) for `want` sessions to be live, then record how many
 /// are live in `bin/live-counts`. More than `want` shows up as a higher count, fewer as
-/// a lower one.
+/// a lower one. Once `want` were live together, later sessions (the tail of the
+/// frontier, which can never fill the ceiling again) stop waiting.
 fn claude_counts_live(s: &Scratch, want: usize) {
     claude(
         s,
         &format!(
             "mkdir \"$bin/live.$slug\"\nlive() {{ ls -d \"$bin\"/live.* | wc -l; }}\n\
-             i=0; while [ $(live) -lt {want} ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n\
+             i=0; while [ ! -e \"$bin/reached\" ] && [ $(live) -lt {want} ] && [ $i -lt 200 ]; do\n\
+             sleep 0.05; i=$((i+1)); done\n\
+             [ $(live) -ge {want} ] && touch \"$bin/reached\"\n\
              sleep 0.3\nlive >> \"$bin/live-counts\"\nrmdir \"$bin/live.$slug\""
         ),
     );
@@ -154,18 +157,18 @@ fn the_graph_width_is_the_widest_level_of_open_tickets() {
 #[test]
 fn max_parallel_overrides_the_derived_number_from_the_flag_or_the_machine_config() {
     let s = Scratch::new();
-    independent(&s, &["a", "b", "c", "d"]);
+    independent(&s, &["a", "b"]);
     claude_counts_live(&s, 1);
-    s.machine_config("version = 1\nmax_parallel = 1\n");
+    s.machine_config("version = 1\nnotifications = false\nmax_parallel = 1\n");
 
     let out = s.run(&["run", "auth", "--branch", "int"]).ok();
     assert!(out.contains("max parallel: 1\n"), "{out}");
     assert_eq!(most_live(&s), 1);
 
     let s = Scratch::new();
-    independent(&s, &["a", "b", "c", "d", "e", "f"]);
+    independent(&s, &["a", "b", "c", "d"]);
     claude_counts_live(&s, 3);
-    s.machine_config("version = 1\nmax_parallel = 1\n");
+    s.machine_config("version = 1\nnotifications = false\nmax_parallel = 1\n");
 
     let out = s
         .run(&["run", "auth", "--branch", "int", "--max-parallel", "3"])
@@ -292,23 +295,21 @@ fn a_cycle_appearing_mid_run_stops_new_starts_while_running_sessions_finish() {
          esac",
     );
 
-    let out = std::thread::scope(|scope| {
-        let run = scope.spawn(|| s.run(&["run", "auth", "--branch", "int"]));
-        wait_for_log(&s, "run paused: blocking cycle: c -> d -> c");
-        fs::write(s.bin.join("release"), "").unwrap();
-        wait_for_log(&s, "ticket b finished");
-        sleep(Duration::from_millis(300));
-        assert_eq!(s.calls("claude").len(), 2, "a session started in a cycle");
-        assert!(!run.is_finished(), "a cycle ended the run");
-        // The user breaks the cycle.
-        let specs = integration_specs(&s);
-        fs::write(
-            specs.join("d.md"),
-            "# D\n\nStatus: ready-for-agent\n\nbody\n",
-        )
-        .unwrap();
-        run.join().unwrap().ok()
-    });
+    let mut run = s.start(&["run", "auth", "--branch", "int"]);
+    wait_for_log(&s, "run paused: blocking cycle: c -> d -> c");
+    fs::write(s.bin.join("release"), "").unwrap();
+    wait_for_log(&s, "ticket b finished");
+    sleep(Duration::from_millis(300));
+    assert_eq!(s.calls("claude").len(), 2, "a session started in a cycle");
+    assert!(run.is_running(), "a cycle ended the run");
+    // The user breaks the cycle.
+    let specs = integration_specs(&s);
+    fs::write(
+        specs.join("d.md"),
+        "# D\n\nStatus: ready-for-agent\n\nbody\n",
+    )
+    .unwrap();
+    let out = run.finish().ok();
 
     let events = events(&out);
     let paused = position(&events, "run paused: blocking cycle");
@@ -343,18 +344,17 @@ fn running_sessions_carry_on_while_the_tracker_is_paused() {
     );
     let hook = tracker_down(&s);
 
-    std::thread::scope(|scope| {
-        let run = scope.spawn(|| s.run(&["run", "auth", "--branch", "int"]));
-        wait_for_log(&s, "run paused: mark a finished failed");
-        fs::write(s.bin.join("release"), "").unwrap();
-        wait_for_file(&s.bin.join("b.ran"));
-        let log = run_log(&s).unwrap();
-        assert!(!log.contains("run recovered"), "{log}");
-        fs::remove_file(hook).unwrap();
-        let out = run.join().unwrap().ok();
-        let events = events(&out);
-        let recovered = position(&events, "run recovered: mark a finished succeeded");
-        assert!(recovered < position(&events, "ticket b finished"), "{out}");
-    });
+    let run = s.start(&["run", "auth", "--branch", "int"]);
+    wait_for_log(&s, "run paused: mark a finished failed");
+    fs::write(s.bin.join("release"), "").unwrap();
+    wait_for_file(&s.bin.join("b.ran"));
+    let log = run_log(&s).unwrap();
+    assert!(!log.contains("run recovered"), "{log}");
+    fs::remove_file(hook).unwrap();
+    let out = run.finish().ok();
+
+    let events = events(&out);
+    let recovered = position(&events, "run recovered: mark a finished succeeded");
+    assert!(recovered < position(&events, "ticket b finished"), "{out}");
     s.git(&["cat-file", "-e", "int:b.txt"]);
 }

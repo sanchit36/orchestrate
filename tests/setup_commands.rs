@@ -57,7 +57,7 @@ fn approvals(s: &Scratch) -> String {
 }
 
 /// Kind, location, ready, headings, approval, gates, seeds, mode, spec.
-const ANSWERS: &str = "\nACME\n\n\nyes\n\n\n\nauth\n";
+const ANSWERS: &str = "\nACME\n\n\nyes\ncheck: true\n\n\n\nauth\n";
 
 #[test]
 fn compiles_templates_from_the_guide_shows_them_records_approval_and_verifies() {
@@ -124,7 +124,7 @@ fn without_a_guide_the_agent_compiles_from_the_users_one_paragraph_description()
     tracker(&s);
     compiler(&s, "");
 
-    let answers = "commands\nACME\n\n\nLinear, reached with the `linear` CLI.\nyes\n\n\n\nauth\n";
+    let answers = "commands\nACME\n\n\nLinear, reached with the `linear` CLI.\nyes\ncheck: true\n\n\n\nauth\n";
     let out = s.run_with_input(&["setup"], answers).ok();
 
     assert!(
@@ -183,8 +183,11 @@ fn re_running_keeps_approved_templates_without_compiling_or_asking_again() {
     s.run_with_input(&["setup"], ANSWERS).ok();
     let first = repo_config(&s)["tracker"]["commands"].clone();
 
-    // Kind, location, ready, headings, keep the templates, gates, seeds, mode, spec.
-    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
+    // Kind, location, ready, headings, keep the templates, keep the gate, no more gates,
+    // seeds, mode, spec.
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\n\n\n\n\n\nauth\n")
+        .ok();
 
     assert!(
         out.contains("Recompile the command templates (yes or no) [no]"),

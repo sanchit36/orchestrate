@@ -1,13 +1,14 @@
 //! GitHub tracker over `gh api` and gh's own login; orchestrate stores no credentials.
 //! The spec is an issue (id = its number) and its native sub-issues are the tickets, in
 //! sub-issue order. Closed is finished; ready is the configured label. Blockers are the
-//! native dependencies plus the body forms (`#12`, `12`, issue URLs). Only REST calls
-//! through `gh api` are made, so `gh` older than 2.94 (no `--parent` / `--blocked-by`)
-//! works, and issue numbers are all those paths need: no database id is ever looked up.
+//! native dependencies plus the body forms (`#12`, `12`, `owner/repo#12`, issue URLs),
+//! another repo's issues read from that repo. Only REST calls through `gh api` are
+//! made, so `gh` older than 2.94 (no `--parent` / `--blocked-by`) works, and issue
+//! numbers are all those paths need: no database id is ever looked up.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -15,10 +16,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{Blocker, Spec, Ticket, Tracker};
-use crate::markdown;
+use crate::{config, markdown, process};
 
 pub struct GitHub {
     pub gh: PathBuf,
+    /// How long one `gh` call may run.
+    pub timeout: Duration,
     /// `owner/name`.
     pub repo: String,
     pub ready: String,
@@ -32,6 +35,9 @@ struct Issue {
     body: Option<String>,
     state: State,
     labels: Vec<Label>,
+    /// `https://api.github.com/repos/<owner>/<name>`.
+    #[serde(default)]
+    repository_url: Option<String>,
 }
 
 #[derive(Deserialize, PartialEq)]
@@ -61,26 +67,26 @@ impl GitHub {
         path: &str,
         input: Option<Value>,
     ) -> Result<Option<T>> {
-        let path = format!("repos/{}/issues/{path}", self.repo);
+        self.api_in(&self.repo, method, path, input)
+    }
+
+    /// [`Self::api`] in `repo` (`owner/name`).
+    fn api_in<T: DeserializeOwned>(
+        &self,
+        repo: &str,
+        method: &str,
+        path: &str,
+        input: Option<Value>,
+    ) -> Result<Option<T>> {
+        let path = format!("repos/{repo}/issues/{path}");
         let what = || format!("gh api -X {method} {path}");
         let mut cmd = Command::new(&self.gh);
-        cmd.args(["api", "-X", method, &path])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(["api", "-X", method, &path]).stdin(Stdio::null());
         if input.is_some() {
             cmd.args(["--input", "-"]).stdin(Stdio::piped());
         }
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("running {}", self.gh.display()))?;
-        if let Some(input) = input {
-            let mut stdin = child.stdin.take().unwrap();
-            stdin
-                .write_all(input.to_string().as_bytes())
-                .with_context(what)?;
-        }
-        let out = child.wait_with_output().with_context(what)?;
+        let input = input.map(|i| i.to_string()).unwrap_or_default();
+        let out = process::output(&mut cmd, input.as_bytes(), self.timeout).with_context(what)?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             if err.contains("HTTP 404") {
@@ -114,6 +120,21 @@ impl GitHub {
             ready: issue.labels.iter().any(|l| l.name == self.ready),
         }
     }
+
+    /// `issue` as a blocker: its number in this repo, `owner/name#<number>` in another.
+    fn blocker(&self, issue: Issue) -> Blocker {
+        let repo = (issue.repository_url.as_deref())
+            .and_then(|u| u.rsplit_once("/repos/"))
+            .map(|(_, repo)| repo)
+            .filter(|repo| !repo.eq_ignore_ascii_case(&self.repo));
+        Blocker {
+            id: match repo {
+                Some(repo) => format!("{repo}#{}", issue.number),
+                None => issue.number.to_string(),
+            },
+            finished: Some(issue.state == State::Closed),
+        }
+    }
 }
 
 /// `id`, checked to be an issue number because it goes into the API path.
@@ -124,10 +145,22 @@ fn number(id: &str) -> Result<&str> {
     Ok(id)
 }
 
-/// The issue number a body reference names: `#12`, `12`, `owner/repo#12` or an issue URL.
-/// shortcut: another repo's issue is looked up by number in this repo; fine until specs span repos.
-fn reference(r: &str) -> Option<&str> {
-    number(r.rsplit(['#', '/']).next()?).ok()
+/// The repo (`None` for this one) and issue number a body reference names: `#12`, `12`,
+/// `owner/repo#12` or an issue URL. `None` for anything else, such as a malformed repo.
+fn reference(r: &str) -> Option<(Option<&str>, &str)> {
+    let n = number(r.rsplit(['#', '/']).next()?).ok()?;
+    let rest = &r[..r.len() - n.len()];
+    let rest = (rest.strip_suffix('#'))
+        .or_else(|| rest.strip_suffix("/issues/"))
+        .unwrap_or(rest);
+    let rest = rest.strip_prefix("https://github.com/").unwrap_or(rest);
+    match rest {
+        "" => Some((None, n)),
+        // The repo goes into an API path, so it must be a plain `owner/name`.
+        repo => config::check_github_repo(repo)
+            .ok()
+            .map(|()| (Some(repo), n)),
+    }
 }
 
 impl Tracker for GitHub {
@@ -152,29 +185,28 @@ impl Tracker for GitHub {
         // shortcut: one page of 100 native blockers; page through if a ticket ever has more.
         let path = format!("{n}/dependencies/blocked_by?per_page=100");
         let native: Vec<Issue> = self.need("GET", &path, None)?;
-        let closed = |i: Issue| Blocker {
-            id: i.number.to_string(),
-            finished: Some(i.state == State::Closed),
-        };
-        let mut blockers: Vec<Blocker> = native.into_iter().map(closed).collect();
+        let mut blockers: Vec<Blocker> = native.into_iter().map(|i| self.blocker(i)).collect();
         let issue: Issue = self.need("GET", n, None)?;
         for r in markdown::blocked_by(issue.body.as_deref().unwrap_or_default()) {
-            let Some(id) = reference(&r) else {
+            let Some((repo, n)) = reference(&r) else {
                 blockers.push(Blocker {
                     id: r,
                     finished: None,
                 });
                 continue;
             };
+            let repo = repo.filter(|repo| !repo.eq_ignore_ascii_case(&self.repo));
+            let id = match repo {
+                Some(repo) => format!("{repo}#{n}"),
+                None => n.to_string(),
+            };
             if blockers.iter().any(|b| b.id == id) {
                 continue;
             }
-            blockers.push(match self.api::<Issue>("GET", id, None)? {
-                Some(i) => closed(i),
-                None => Blocker {
-                    id: id.to_string(),
-                    finished: None,
-                },
+            let found = self.api_in::<Issue>(repo.unwrap_or(&self.repo), "GET", n, None)?;
+            blockers.push(Blocker {
+                id,
+                finished: found.map(|i| i.state == State::Closed),
             });
         }
         Ok(blockers)
@@ -249,6 +281,7 @@ mod contract {
             };
             let tracker = GitHub {
                 gh: dir.path().join("gh"),
+                timeout: std::time::Duration::from_secs(60),
                 repo: "acme/app".into(),
                 ready: "ready-for-agent".into(),
                 criteria_headings: HEADINGS.iter().map(|h| h.to_string()).collect(),

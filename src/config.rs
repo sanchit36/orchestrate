@@ -167,6 +167,10 @@ pub struct TrackerConfig {
     pub probe_backoff: Duration,
     #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
     pub probe_backoff_max: Duration,
+    /// How long one adapter call (a `gh` or template command) may run before it is
+    /// killed and fails.
+    #[serde(default = "default_tracker_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
     /// The templates of `kind = "commands"`, and only of that kind.
     pub commands: Option<Commands>,
 }
@@ -216,6 +220,10 @@ fn default_probe_backoff() -> Duration {
 
 fn default_probe_backoff_max() -> Duration {
     Duration::from_secs(5 * 60)
+}
+
+fn default_tracker_timeout() -> Duration {
+    Duration::from_secs(60)
 }
 
 /// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
@@ -286,6 +294,13 @@ fn check_gate(gate: &Gate) -> Result<()> {
     if !gate.dirs.is_empty() && gate.cwd.is_some() {
         bail!("gate {}: set `dirs` or `cwd`, not both", gate.name);
     }
+    // A `dirs` entry names folders at its own depth.
+    if let Some(dir) = gate.dirs.iter().find(|d| d.contains("**")) {
+        bail!(
+            "gate {}: `dirs` entry `{dir}`: `**` is not supported",
+            gate.name
+        );
+    }
     for pattern in gate.paths.iter().chain(&gate.dirs) {
         crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
     }
@@ -293,7 +308,7 @@ fn check_gate(gate: &Gate) -> Result<()> {
 }
 
 /// A GitHub `location` goes into API paths, so it must be a plain `owner/repo`.
-fn check_github_repo(location: &str) -> Result<()> {
+pub fn check_github_repo(location: &str) -> Result<()> {
     let part = |p: &str| {
         let allowed = |c: char| c.is_ascii_alphanumeric() || "-_.".contains(c);
         !p.is_empty() && p != "." && p != ".." && p.chars().all(allowed)

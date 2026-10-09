@@ -2,6 +2,7 @@
 //! Nothing is written in or beside the working tree.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,17 @@ pub fn repo_dir(machine: &MachineConfig, top: &Path) -> Result<PathBuf> {
 /// `state_dir`, else `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate`.
 pub fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
     if let Some(dir) = &machine.state_dir {
-        return Ok(dir.clone());
+        let Ok(in_home) = dir.strip_prefix("~") else {
+            if !dir.is_absolute() {
+                bail!(
+                    "state_dir `{}` must be absolute or start with `~/`",
+                    dir.display()
+                );
+            }
+            return Ok(dir.clone());
+        };
+        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        return Ok(PathBuf::from(home).join(in_home));
     }
     match std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
         Some(xdg) => Ok(PathBuf::from(xdg).join("orchestrate")),
@@ -125,18 +136,77 @@ pub struct State {
     pub branch: String,
     /// When the run started, as a jiff timestamp.
     pub started: String,
-    /// `running`, `stopped` or `ended`.
-    pub status: String,
+    pub status: RunStatus,
     /// Why a running run is paused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<String>,
     pub tickets: BTreeMap<String, TicketState>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Running,
+    Stopped,
+    Ended,
+}
+
+impl fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Ended => "ended",
+        })
+    }
+}
+
+/// Where a ticket stands in a run.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    #[default]
+    Pending,
+    Running,
+    Integrating,
+    Finished,
+    Failed,
+    /// Failed by outliving the session timeout.
+    Timeout,
+    Stuck,
+    /// Waiting behind a stuck ticket.
+    Held,
+    /// Not worked, behind a failed ticket.
+    Skipped,
+}
+
+impl Outcome {
+    /// Failed, timed out or stuck: its last attempt is kept as evidence.
+    pub fn kept(self) -> bool {
+        matches!(self, Self::Failed | Self::Timeout | Self::Stuck)
+    }
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Integrating => "integrating",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+            Self::Timeout => "timeout",
+            Self::Stuck => "stuck",
+            Self::Held => "held",
+            Self::Skipped => "skipped",
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct TicketState {
     pub title: String,
-    pub outcome: String,
+    pub outcome: Outcome,
     /// Why a ticket failed, timed out, got stuck, or was held or skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -167,10 +237,24 @@ pub struct TicketState {
     pub writeback: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct GateResult {
     pub name: String,
+    /// Its exit code; -1 when killed by a signal or timed out.
     pub code: i32,
+    /// Whether it was killed for outliving its timeout.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
+}
+
+impl GateResult {
+    /// `timed out` or `exited <code>`.
+    pub fn ended(&self) -> String {
+        match self.timed_out {
+            true => "timed out".into(),
+            false => format!("exited {}", self.code),
+        }
+    }
 }
 
 impl State {
@@ -181,7 +265,7 @@ impl State {
             spec: spec.into(),
             branch: branch.into(),
             started: jiff::Timestamp::now().to_string(),
-            status: "running".into(),
+            status: RunStatus::Running,
             paused: None,
             tickets: BTreeMap::new(),
         }
@@ -231,7 +315,7 @@ impl Store {
     /// is about to exit.
     pub fn stop(&self) -> Result<()> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.status = "stopped".into();
+        state.status = RunStatus::Stopped;
         let saved = state.save(&self.run_dir);
         std::mem::forget(state);
         saved

@@ -48,6 +48,7 @@ Run everything from inside your repo.
    ```
 
    Setup detects your tracker, proposes gates from your build files, and asks you to confirm each answer (Enter takes the default in brackets).
+   It keeps asking for a gate until you have at least one.
    It checks the tracker on one real spec, then writes `.orchestrate/config.toml`.
    Commit that file.
 
@@ -103,9 +104,10 @@ Sessions run unattended, so orchestrate decides what they may do and what lands.
 - **Gates decide what lands.**
   A session's own report (done or stuck, a verdict on each criterion) is never trusted alone.
   Work lands only when every gate passes on it rebased onto the integration branch, and `run` refuses to start without a gate.
+  Gates check exactly the commit that merges: a session that leaves changes uncommitted in its worktree fails its ticket.
 - **Work lands on one integration branch.**
   Tickets are merged into the branch you name with `--branch`, for you to review and push.
-  Protected branches (by default `origin`'s default branch, see `protected_branches`) are refused as the integration branch, and `clean` never touches an integration branch.
+  Protected branches (by default `origin`'s default branch, else your checked-out branch; see `protected_branches`) are refused as the integration branch, and `clean` never touches an integration branch.
 - **Only ready tickets start.**
   A ticket starts only when its tracker carries the ready marker and its blockers have finished.
 - **The tracker is reached deterministically.**

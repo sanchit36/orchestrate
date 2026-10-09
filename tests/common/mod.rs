@@ -231,6 +231,12 @@ printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,
         cmd.spawn().unwrap()
     }
 
+    /// Start `orchestrate` from the repo root in the background, stopped if the test
+    /// fails before [`Running::finish`], so a failing test never hangs on a paused run.
+    pub fn start(&self, args: &[&str]) -> Running {
+        Running(Some(self.spawn(args)))
+    }
+
     fn command(&self, cwd: &Path, args: &[&str]) -> Command {
         let path = format!("{}:{}", self.bin.display(), std::env::var("PATH").unwrap());
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_orchestrate"));
@@ -274,6 +280,32 @@ pub fn alive(pid: &str) -> bool {
 fn write(path: &Path, content: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, content).unwrap();
+}
+
+/// A background `orchestrate`; dropped unfinished, it gets SIGTERM, which ends its
+/// sessions too.
+pub struct Running(Option<Child>);
+
+impl Running {
+    /// Whether it has not exited yet.
+    pub fn is_running(&mut self) -> bool {
+        self.0.as_mut().unwrap().try_wait().unwrap().is_none()
+    }
+
+    /// Wait for it to exit.
+    pub fn finish(mut self) -> Run {
+        Run(self.0.take().unwrap().wait_with_output().unwrap())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let pid = child.id().to_string();
+            let _ = Command::new("kill").args(["-TERM", &pid]).status();
+            let _ = child.wait();
+        }
+    }
 }
 
 pub struct Run(pub Output);

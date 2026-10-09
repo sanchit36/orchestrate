@@ -87,9 +87,11 @@ pub fn open(config: &RepoConfig, top: &Path) -> Box<dyn Tracker> {
         TrackerKind::Commands => Box::new(commands::Commands {
             templates: config.tracker.commands.clone().expect("checked at load"),
             dir: top.to_path_buf(),
+            timeout: config.tracker.timeout,
         }),
         TrackerKind::GitHub => Box::new(github::GitHub {
             gh: "gh".into(),
+            timeout: config.tracker.timeout,
             repo: config.tracker.location.clone(),
             ready: config.tracker.ready.clone(),
             criteria_headings: config.criteria_headings.clone(),

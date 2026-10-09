@@ -30,14 +30,18 @@ if [ -d "$(git rev-parse --git-path rebase-merge)" ]; then
   {resolve}
   exit
 fi
+# Each wait gives up after 10 s, so a broken run fails the test instead of hanging it.
+i=0
 case "$slug" in
-  a) until [ -e '{bin}/b.started' ]; do sleep 0.05; done;;
+  a) until [ -e '{bin}/b.started' ] || [ $i -ge 200 ]; do sleep 0.05; i=$((i+1)); done;;
   b) touch '{bin}/b.started'
-     until git log --format=%s int | grep -q 'Merge ticket a'; do sleep 0.05; done;;
+     until git log --format=%s int | grep -q 'Merge ticket a' || [ $i -ge 200 ]; do
+       sleep 0.05; i=$((i+1))
+     done;;
 esac
 echo "$slug" > shared.txt
 git add shared.txt && git commit -q -m "work $slug"
-printf '{{"status":"done","acceptance_criteria":[],"notes":""}}' > .orchestrate-result.json"#
+printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,"evidence":"ok"}}],"notes":""}}' > .orchestrate-result.json"#
         ),
     );
     s

@@ -4,12 +4,8 @@
 //! adapter JSON schema below, or the operation fails.
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -18,15 +14,14 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use super::{Blocker, Spec, Ticket, Tracker, Unsupported, approvals};
-use crate::config;
-
-/// shortcut: one fixed limit per template call; make it a `[tracker]` key if a tracker needs more.
-const TIMEOUT: Duration = Duration::from_secs(60);
+use crate::{config, process};
 
 pub struct Commands {
     pub templates: config::Commands,
     /// Where the templates run: the repo's top level or the integration worktree.
     pub dir: PathBuf,
+    /// How long one template call may run.
+    pub timeout: Duration,
 }
 
 // The adapter JSON schema. Unknown fields are allowed; ids are strings.
@@ -53,7 +48,7 @@ struct BlockerOut {
 }
 
 /// What `mark_finished` and `comment` print: any JSON object, such as `{}`.
-type Done = serde_json::Map<String, serde_json::Value>;
+type Answer = serde_json::Map<String, serde_json::Value>;
 
 #[derive(Deserialize)]
 struct TickOut {
@@ -98,14 +93,14 @@ impl Tracker for Commands {
     }
 
     fn mark_finished(&self, ticket: &str) -> Result<()> {
-        let _: Done = self.call("mark_finished", &self.templates.mark_finished, ticket, "")?;
+        let _: Answer = self.call("mark_finished", &self.templates.mark_finished, ticket, "")?;
         Ok(())
     }
 
     /// The Markdown goes to the template on stdin.
     fn comment(&self, ticket: &str, markdown: &str) -> Result<()> {
         let template = self.templates.comment.as_ref().ok_or(Unsupported)?;
-        let _: Done = self.call("comment", template, ticket, markdown)?;
+        let _: Answer = self.call("comment", template, ticket, markdown)?;
         Ok(())
     }
 
@@ -136,34 +131,13 @@ impl Commands {
             .with_context(|| format!("{name} template printed output outside the schema"))
     }
 
-    /// The template's stdout. It runs in its own process group, killed after [`TIMEOUT`].
+    /// The template's stdout. Its process group is killed after `timeout`.
     fn run(&self, template: &str, id: &str, stdin: &str) -> Result<Vec<u8>> {
-        let mut child = Command::new("sh")
-            .args(["-c", &render(template, id)])
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &render(template, id)])
             .current_dir(&self.dir)
-            .process_group(0)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("launching sh")?;
-        let pgid = child.id();
-        let mut input = child.stdin.take().expect("piped");
-        let stdin = stdin.to_owned();
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            // A template may exit without reading stdin; its exit status tells.
-            let _ = input.write_all(stdin.as_bytes());
-            drop(input);
-            let _ = tx.send(child.wait_with_output());
-        });
-        let Ok(out) = rx.recv_timeout(TIMEOUT) else {
-            let _ = Command::new("kill")
-                .args(["-KILL", "--", &format!("-{pgid}")])
-                .status();
-            bail!("timed out after {TIMEOUT:?}");
-        };
-        let out = out?;
+            .stdin(Stdio::piped());
+        let out = process::output(&mut cmd, stdin.as_bytes(), self.timeout)?;
         if !out.status.success() {
             let code = out.status.code().unwrap_or(-1);
             bail!(
@@ -400,6 +374,7 @@ mod contract {
             let tracker = Commands {
                 templates,
                 dir: dir.path().to_path_buf(),
+                timeout: std::time::Duration::from_secs(60),
             };
             let h = Fixture {
                 _dir: dir,

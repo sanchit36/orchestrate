@@ -39,6 +39,19 @@ impl Report {
         serde_json::from_str(&text).context("malformed report")
     }
 
+    /// Count each of `criteria` (as read at dispatch) the report leaves out as unmet.
+    pub fn cover(&mut self, criteria: &[String]) {
+        for text in criteria {
+            if !self.acceptance_criteria.iter().any(|c| &c.text == text) {
+                self.acceptance_criteria.push(Criterion {
+                    text: text.clone(),
+                    met: false,
+                    evidence: "left out of the report".into(),
+                });
+            }
+        }
+    }
+
     /// The texts of the criteria reported unmet.
     pub fn unmet(&self) -> Vec<String> {
         let unmet = self.acceptance_criteria.iter().filter(|c| !c.met);
@@ -49,4 +62,10 @@ impl Report {
     pub fn is_done(&self) -> bool {
         matches!(self.status, Status::Done) && self.unmet().is_empty()
     }
+}
+
+/// Of `criteria`, the ones `reported` marks met: the only ones ever ticked.
+pub fn met(reported: &[Criterion], criteria: &[String]) -> Vec<String> {
+    let met = |t: &&String| reported.iter().any(|c| c.met && &c.text == *t);
+    criteria.iter().filter(met).cloned().collect()
 }

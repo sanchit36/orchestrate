@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use crate::reporting::Events;
+use crate::events::Events;
 use crate::state::{self, RunDirs, Store};
 use crate::{config, lock, session};
 

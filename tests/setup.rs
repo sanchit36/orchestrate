@@ -34,7 +34,9 @@ fn reads_the_tracker_guide_and_triage_labels_and_never_writes_them_or_the_tracke
     s.git(&["remote", "add", "origin", "git@github.com:acme/app.git"]);
     let gh = github_spec(&s);
 
-    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n10\n").ok();
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\n10\n")
+        .ok();
 
     assert!(
         out.contains("Tracker kind (github, local-markdown or commands) [github]"),
@@ -56,6 +58,7 @@ fn reads_the_tracker_guide_and_triage_labels_and_never_writes_them_or_the_tracke
     assert_eq!((guide.as_str(), labels.as_str()), (GUIDE, LABELS));
     assert!(!gh.closed(12), "verification never marks a ticket finished");
     let calls = s.calls("gh");
+    assert!(!calls.is_empty(), "the fake gh recorded no call");
     let writes = |c: &&String| c.contains("-X PATCH") || c.contains("-X POST");
     assert!(!calls.iter().any(|c| writes(&c)), "{calls:?}");
 }
@@ -67,7 +70,7 @@ fn without_a_guide_the_kind_and_location_come_from_the_git_remote() {
     github_spec(&s);
 
     let out = s
-        .run_with_input(&["setup"], "\n\nagent-go\n\n\n\n\n10\n")
+        .run_with_input(&["setup"], "\n\nagent-go\n\ncheck: true\n\n\n\n10\n")
         .ok();
 
     assert!(
@@ -108,7 +111,9 @@ fn defaults_verify_a_local_markdown_spec_and_write_a_loadable_config() {
     local_spec(&s);
 
     // Every answer the default, then the spec to verify on.
-    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\nauth\n").ok();
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nauth\n")
+        .ok();
 
     assert!(
         out.contains("Spec auth: Login rework\n\nFrontier:\n  02-api  Build API\n"),
@@ -190,7 +195,9 @@ fn proposes_ignored_local_files_as_seed_files_and_states_the_permission_default(
         s.write(f, "x");
     }
 
-    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\nauth\n").ok();
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nauth\n")
+        .ok();
 
     assert!(
         out.contains("[.env, .env.local, .claude/settings.local.json]"),
@@ -215,7 +222,7 @@ fn asks_machine_preferences_only_when_the_machine_config_is_missing() {
     fs::remove_file(&machine).unwrap();
 
     let out = s
-        .run_with_input(&["setup"], "\n\n\n\n\n\n\n3\nno\nauth\n")
+        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\n3\nno\nauth\n")
         .ok();
 
     assert!(out.contains("Desktop notifications"), "{out}");
@@ -223,7 +230,7 @@ fn asks_machine_preferences_only_when_the_machine_config_is_missing() {
     assert!(written.contains("max_parallel = 3"), "{written}");
     assert!(written.contains("notifications = false"), "{written}");
 
-    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\nauth\n").ok();
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
     assert!(!out.contains("Desktop notifications"), "{out}");
 }
 
@@ -232,7 +239,9 @@ fn a_failed_verification_writes_nothing() {
     let s = Scratch::new();
     local_spec(&s);
 
-    let err = s.run_with_input(&["setup"], "\n\n\n\n\n\n\nnope\n").fails();
+    let err = s
+        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nnope\n")
+        .fails();
 
     assert!(err.contains("verification failed"), "{err}");
     assert!(!s.repo.join(".orchestrate").exists());
@@ -242,7 +251,7 @@ fn a_failed_verification_writes_nothing() {
 fn skipping_verification_warns_and_saves() {
     let s = Scratch::new();
 
-    let run = s.run_with_input(&["setup"], "\n\n\n\n\n\n\nskip\n");
+    let run = s.run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nskip\n");
 
     run.ok();
     let err = run.stderr();
@@ -259,6 +268,25 @@ fn running_out_of_answers_fails_without_writing() {
 
     assert!(err.contains("no answer for"), "{err}");
     assert!(!s.repo.join(".orchestrate").exists());
+}
+
+#[test]
+fn setup_asks_until_there_is_a_gate_and_never_saves_without_one() {
+    let s = Scratch::new();
+    local_spec(&s);
+    s.write("Cargo.toml", "");
+
+    // Drop the detected gate, then finish with none: setup asks again.
+    let err = s.run_with_input(&["setup"], "\n\n\n\n-\n\n").fails();
+    assert!(err.contains("no answer for"), "{err}");
+    assert!(!s.repo.join(".orchestrate").exists());
+
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\n-\n\ncheck: true\n\n\n\nauth\n")
+        .ok();
+
+    assert!(out.contains("At least one gate is required"), "{out}");
+    assert_eq!(repo_config(&s)["gates"][0]["run"].as_str(), Some("true"));
 }
 
 #[test]

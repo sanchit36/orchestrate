@@ -8,17 +8,35 @@ fn heading(line: &str) -> Option<(usize, &str)> {
     (1..=6).contains(&level).then_some((level, text.trim()))
 }
 
+/// Reads headings line by line, skipping fenced code blocks, where a `#` line is code.
+#[derive(Default)]
+struct Headings {
+    fenced: bool,
+}
+
+impl Headings {
+    fn heading<'a>(&mut self, line: &'a str) -> Option<(usize, &'a str)> {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            self.fenced = !self.fenced;
+            return None;
+        }
+        if self.fenced { None } else { heading(line) }
+    }
+}
+
 /// The lines under the first heading (any level) named one of `names`, ignoring case,
 /// up to the next heading of the same or higher level.
 pub fn section<'a, S: AsRef<str>>(body: &'a str, names: &[S]) -> Option<Vec<&'a str>> {
+    let mut headings = Headings::default();
     let mut lines = body.lines();
     let (level, _) = lines
         .by_ref()
-        .filter_map(heading)
+        .filter_map(|l| headings.heading(l))
         .find(|(_, text)| names.iter().any(|n| n.as_ref().eq_ignore_ascii_case(text)))?;
     Some(
         lines
-            .take_while(|l| heading(l).is_none_or(|(lv, _)| lv > level))
+            .take_while(|l| headings.heading(l).is_none_or(|(lv, _)| lv > level))
             .collect(),
     )
 }
@@ -35,13 +53,30 @@ pub fn blocked_by(body: &str) -> Vec<String> {
         .into_iter()
         .filter_map(list_item);
     let mut refs = Vec::new();
-    // shortcut: splits on every comma, so a link text containing a comma breaks; fine until someone writes one.
-    for r in line.into_iter().chain(items).flat_map(|s| s.split(',')) {
+    for r in line.into_iter().chain(items).flat_map(split_refs) {
         let r = link_target(r.trim()).to_string();
         if !r.is_empty() && !refs.contains(&r) {
             refs.push(r);
         }
     }
+    refs
+}
+
+/// `s` split at each comma outside a link's `[text]`.
+fn split_refs(s: &str) -> Vec<&str> {
+    let (mut depth, mut start, mut refs) = (0usize, 0, Vec::new());
+    for (i, c) in s.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                refs.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    refs.push(&s[start..]);
     refs
 }
 
@@ -98,13 +133,13 @@ fn checkbox(line: &str) -> Option<(bool, String)> {
 /// heading rule as [`criteria`]; also returns the `texts` no criterion has any more.
 pub fn tick<S: AsRef<str>>(body: &str, headings: &[S], texts: &[String]) -> (String, Vec<String>) {
     let mut found = Vec::new();
-    let (mut level, mut passed) = (None, false);
+    let (mut level, mut passed, mut reader) = (None, false, Headings::default());
     let mut out = String::new();
     // Line ends (`\n` or GitHub's `\r\n`) are kept, so only ticked lines change.
     for raw in body.split_inclusive('\n') {
         let line = raw.strip_suffix('\n').unwrap_or(raw);
         let line = line.strip_suffix('\r').unwrap_or(line);
-        if let Some((lv, name)) = heading(line) {
+        if let Some((lv, name)) = reader.heading(line) {
             if level.is_some_and(|l| lv <= l) {
                 (level, passed) = (None, true);
             } else if level.is_none() && !passed {

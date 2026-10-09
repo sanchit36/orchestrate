@@ -77,10 +77,7 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     repo.insert("criteria_headings".into(), headings.into());
 
     let gates = ask_gates(&mut ask, top, repo.get("gates"))?;
-    match gates.is_empty() {
-        true => _ = repo.remove("gates"),
-        false => _ = repo.insert("gates".into(), Value::Array(gates)),
-    }
+    repo.insert("gates".into(), Value::Array(gates));
 
     let seeds = match strings(&repo, "seed_files") {
         Some(seeds) => seeds,
@@ -152,8 +149,13 @@ fn ask_gates(ask: &mut Ask, top: &Path, current: Option<&Value>) -> Result<Vec<V
     }
     loop {
         let line = ask.line("Another gate as `name: command` (Enter to finish)")?;
-        if line.is_empty() {
-            return Ok(gates);
+        match (line.is_empty(), gates.is_empty()) {
+            (true, false) => return Ok(gates),
+            (true, true) => {
+                println!("At least one gate is required: `run` refuses to start without one.");
+                continue;
+            }
+            _ => {}
         }
         match line.split_once(':').map(|(n, r)| (n.trim(), r.trim())) {
             Some((name, run)) if !name.is_empty() && !run.is_empty() => {
@@ -200,11 +202,11 @@ fn verify(config: &RepoConfig, top: &Path, spec_id: &str) -> Result<()> {
         eprintln!("orchestrate: warning: {warning}");
     }
     let tracker = tracker::open(config, top);
-    let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)
+    let reading = spec::read_to_start(tracker.as_ref(), spec_id, &config.criteria_headings)
         .context("verification failed; nothing written")?;
     println!();
     let plan = planner::plan(&reading).context("verification failed; nothing written")?;
-    // `spec::read` refuses a spec without a ready ticket, so the frontier or the list has one.
+    // `spec::read_to_start` refuses a spec without a ready ticket, so the frontier or the list has one.
     let sample = (plan.frontier.first().copied())
         .unwrap_or(&reading.tickets[0].ticket)
         .id
