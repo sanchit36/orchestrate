@@ -20,12 +20,16 @@ _Avoid_: sub-issue, task, child issue
 The relationship from a ticket to another ticket that must finish before it can start.
 _Avoid_: depends on, prerequisite
 
+**Ready**:
+The mark on a ticket saying it may be worked by an unattended session; a ticket that is not ready never starts.
+_Avoid_: approved, queued
+
 **Finished**:
 The state of a ticket whose gated work has landed on the integration branch, as the tracker records it.
 _Avoid_: done, closed, merged
 
 **Frontier**:
-The open tickets of a spec whose blockers have all finished, so they can start now.
+The open, ready tickets of a spec whose blockers have all finished, so they can start now.
 _Avoid_: wave, ready queue
 
 **Acceptance criteria**:
