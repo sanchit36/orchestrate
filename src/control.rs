@@ -43,16 +43,23 @@ pub fn stop_on_signal(dirs: &RunDirs, store: Arc<Store>) -> Result<()> {
     Ok(())
 }
 
-/// Signal the live run (optionally the one whose id starts with `run`) and wait for it to stop.
+/// Signal the live run (when given, the one `--run` resolves to) and wait for it to stop.
 pub fn stop(top: &Path, run: Option<&str>) -> Result<()> {
     let (_, machine) = config::load(top)?;
     let repo_dir = state::repo_dir(&machine, top)?;
     let Some(live) = lock::live(&repo_dir)? else {
         bail!("no live run in this repo");
     };
-    // shortcut: matches a prefix of the live run id only; full `--run` resolution is its own ticket.
-    if let Some(run) = run.filter(|r| !live.run.starts_with(r)) {
-        bail!("run {run} is not live; the live run is {}", live.run);
+    if let Some(run) = run {
+        let named = state::resolve(state::runs(&repo_dir)?, Some(run))
+            .map_err(|e| anyhow::anyhow!("{e:#}; the live run is {}", live.run))?;
+        if named.run_id != live.run {
+            bail!(
+                "run {} is not live; the live run is {}",
+                named.run_id,
+                live.run
+            );
+        }
     }
     if unsafe { libc::kill(live.pid, libc::SIGTERM) } != 0 {
         return Err(std::io::Error::last_os_error()).context("signalling the run");
@@ -64,22 +71,15 @@ pub fn stop(top: &Path, run: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Re-launch this `run` in its own session, apart from the terminal, and return once
-/// it holds the repo lock, printing its run id and `run.log` path.
-pub fn detach(
-    top: &Path,
-    spec: &str,
-    branch: &str,
-    max_parallel: Option<config::MaxParallel>,
-) -> Result<()> {
+/// Re-launch this command (`run` or `resume`, as `args`) in its own session, apart
+/// from the terminal, and return once it holds the repo lock, printing its run id and
+/// `run.log` path.
+pub fn detach(top: &Path, args: &[String]) -> Result<()> {
     let (_, machine) = config::load(top)?;
     let repo_dir = state::repo_dir(&machine, top)?;
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["run", spec, "--branch", branch]);
-    if let Some(max) = max_parallel {
-        cmd.args(["--max-parallel", &max.to_string()]);
-    }
-    cmd.stdin(Stdio::null())
+    cmd.args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     unsafe {

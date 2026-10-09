@@ -9,6 +9,7 @@ mod planner;
 mod prompt;
 mod report;
 mod reporting;
+mod resume;
 mod run;
 mod session;
 mod spec;
@@ -57,9 +58,18 @@ enum Cmd {
     },
     /// Stop the live run: kill its sessions and mark it stopped.
     Stop {
-        /// The run to stop: its id or an id prefix.
+        /// A run id, unique id prefix or spec id; default the live run.
         #[arg(long)]
         run: Option<String>,
+    },
+    /// Continue a stopped or crashed run, restarting the tickets it left in flight.
+    Resume {
+        /// A run id, unique id prefix or spec id; default the most recent run.
+        #[arg(long)]
+        run: Option<String>,
+        /// Keep running in the background after the terminal closes.
+        #[arg(long)]
+        detach: bool,
     },
     /// Show where a run is, or diagnose one of its tickets. Reads run state only.
     Status {
@@ -83,8 +93,22 @@ fn main() -> ExitCode {
             max_parallel,
             detach,
         } => git_toplevel().and_then(|top| match detach {
-            true => control::detach(&top, &spec, &branch, max_parallel),
+            true => {
+                let mut args = vec!["run".to_string(), spec, "--branch".into(), branch];
+                if let Some(max) = max_parallel {
+                    args.extend(["--max-parallel".into(), max.to_string()]);
+                }
+                control::detach(&top, &args)
+            }
             false => run::run(&top, &spec, &branch, max_parallel),
+        }),
+        Cmd::Resume { run, detach } => git_toplevel().and_then(|top| match detach {
+            true => {
+                let mut args = vec!["resume".to_string()];
+                args.extend(run.map(|r| ["--run".to_string(), r]).into_iter().flatten());
+                control::detach(&top, &args)
+            }
+            false => resume::resume(&top, run.as_deref()),
         }),
         Cmd::Stop { run } => git_toplevel().and_then(|top| control::stop(&top, run.as_deref())),
         Cmd::Status { ticket, run } => {
