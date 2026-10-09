@@ -29,6 +29,10 @@ fn a_two_ticket_chain_lands_both_tickets_in_order_as_no_ff_merges() {
     s.git(&["cat-file", "-e", "int:a.txt"]);
     s.git(&["cat-file", "-e", "int:b.txt"]);
     assert_eq!(s.calls("claude").len(), 2);
+    // The report is git-excluded once for the repo, however many worktrees there were.
+    let exclude = std::fs::read_to_string(s.repo.join(".git/info/exclude")).unwrap();
+    let lines = exclude.lines().filter(|l| *l == "/.orchestrate-result.json");
+    assert_eq!(lines.count(), 1, "{exclude}");
 }
 
 #[test]

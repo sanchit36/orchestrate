@@ -194,4 +194,6 @@ state_dir = "/Volumes/scratch/orchestrate"
 Orchestrate also keeps, without you editing them:
 
 - `~/.config/orchestrate/approvals.toml`: the command templates you approved on this machine (see [trackers.md](trackers.md#approval)).
+- One line, `/.orchestrate-result.json`, in your repo's `.git/info/exclude`, added once so a session's report is never committed.
+  Git has no exclude file per worktree, so this is the only place orchestrate writes inside your repo.
 - Under the state dir, one folder per repo (`<repo-folder>-<hash>`) holding `runs/<run-id>/state.json`, the logs in `runs/<run-id>/logs/` (`run.log` and one file per session, gate and preparation) and the worktrees in `worktrees/<run-id>/`.
