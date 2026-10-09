@@ -33,8 +33,16 @@ impl RunDirs {
             .with_context(|| format!("creating {}", repo_dir.display()))?;
         let path = toml::Value::String(top.to_string_lossy().into_owned());
         fs::write(repo_dir.join("repo.toml"), format!("path = {path}\n"))?;
-        let now = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
-        let id = format!("{}-{now}", slug(spec));
+        // Ids are to the second: a run of the same spec within the same second as the
+        // last one waits for the next second rather than reuse its dirs.
+        let id = loop {
+            let now = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
+            let id = format!("{}-{now}", slug(spec));
+            if !repo_dir.join("runs").join(&id).exists() {
+                break id;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
         let lock = lock::acquire(&repo_dir, &id)?;
         let run = repo_dir.join("runs").join(&id);
         let logs = run.join("logs");
