@@ -9,7 +9,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
@@ -173,18 +173,22 @@ pub struct TrackerConfig {
 
 /// `[tracker.commands]`: shell command templates reaching a tracker without a built-in
 /// adapter. `{id}` is replaced by the shell-quoted spec or ticket id.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Commands {
     pub get_spec: String,
     pub list_tickets: String,
     pub list_blockers: String,
     pub mark_finished: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tick: Option<String>,
     /// The tracker guide (relative to the top level) the templates were compiled from,
     /// and its hash (`sha256:<hex>`) at that time.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub guide: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub guide_hash: Option<String>,
 }
 

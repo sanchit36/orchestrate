@@ -2,6 +2,7 @@
 //! config (and the machine config when there is none). Answers are read line by line,
 //! so a script can feed them on stdin; an empty answer takes the `[default]`.
 
+mod compile;
 mod detect;
 
 use std::fs;
@@ -12,9 +13,10 @@ use anyhow::{Context, Result, bail};
 use toml::{Table, Value};
 
 use crate::config::{self, MaxParallel, RepoConfig, TrackerKind};
+use crate::tracker::commands;
 use crate::{planner, spec, tracker};
 
-const KINDS: [&str; 2] = ["github", "local-markdown"];
+const KINDS: [&str; 3] = ["github", "local-markdown", "commands"];
 
 pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     let repo_path = top.join(config::REPO_CONFIG);
@@ -27,7 +29,10 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     let current_kind = text(tracker, "kind");
     let kind = loop {
         let default = current_kind.clone().unwrap_or(detect::kind(top).into());
-        let kind = ask.ask("Tracker kind (github or local-markdown)", &default)?;
+        let kind = ask.ask(
+            "Tracker kind (github, local-markdown or commands)",
+            &default,
+        )?;
         match KINDS.contains(&kind.as_str()) {
             true => break kind,
             false => println!("Pick one of: {}", KINDS.join(", ")),
@@ -39,6 +44,7 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     };
     let what = match kind.as_str() {
         "github" => "owner/repo",
+        "commands" => "project, board or URL the templates reach",
         _ => "folder of spec folders",
     };
     let location = ask.ask(
@@ -49,14 +55,25 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
         .or_else(|| detect::ready(top))
         .unwrap_or("ready-for-agent".into());
     let ready = ask.ask("Ready marker", &ready)?;
-    tracker.remove("commands");
-    tracker.insert("kind".into(), kind.into());
-    tracker.insert("location".into(), location.into());
-    tracker.insert("ready".into(), ready.into());
+    let current_commands = tracker
+        .remove("commands")
+        .filter(|_| current_kind.as_deref() == Some("commands"));
+    tracker.insert("kind".into(), kind.clone().into());
+    tracker.insert("location".into(), location.clone().into());
+    tracker.insert("ready".into(), ready.clone().into());
 
     let headings = strings(&repo, "criteria_headings")
         .unwrap_or(vec!["Acceptance criteria".into(), "Acceptance".into()]);
     let headings = ask.list("Acceptance criteria headings", &headings)?;
+    if kind == "commands" {
+        let source = compile::Source {
+            location,
+            ready,
+            headings: headings.clone(),
+        };
+        let commands = compile::templates(&mut ask, top, &source, current_commands)?;
+        table(&mut repo, "tracker")?.insert("commands".into(), commands);
+    }
     repo.insert("criteria_headings".into(), headings.into());
 
     let gates = ask_gates(&mut ask, top, repo.get("gates"))?;
@@ -202,7 +219,10 @@ fn verify(config: &RepoConfig, top: &Path, spec_id: &str) -> Result<()> {
         TrackerKind::LocalMarkdown => format!(
             "set `Status: done` in {location}/{spec_id}/{sample}.md and commit it on the integration branch"
         ),
-        TrackerKind::Commands => unreachable!("setup offers built-in kinds only"),
+        TrackerKind::Commands => {
+            let templates = config.tracker.commands.as_ref().expect("checked at load");
+            commands::render(&templates.mark_finished, &sample)
+        }
     };
     println!("\nMarking a ticket finished would run (not run now):\n  {command}\n");
     Ok(())

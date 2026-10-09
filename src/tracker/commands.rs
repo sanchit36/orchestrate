@@ -139,7 +139,7 @@ impl Commands {
     /// The template's stdout. It runs in its own process group, killed after [`TIMEOUT`].
     fn run(&self, template: &str, id: &str, stdin: &str) -> Result<Vec<u8>> {
         let mut child = Command::new("sh")
-            .args(["-c", &template.replace("{id}", &quote(id))])
+            .args(["-c", &render(template, id)])
             .current_dir(&self.dir)
             .process_group(0)
             .stdin(Stdio::piped())
@@ -175,6 +175,11 @@ impl Commands {
     }
 }
 
+/// `template` as `sh -c` runs it for `id`: `{id}` replaced by the single-quoted id.
+pub fn render(template: &str, id: &str) -> String {
+    template.replace("{id}", &quote(id))
+}
+
 /// `s` as one single-quoted shell word.
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
@@ -183,17 +188,10 @@ fn quote(s: &str) -> String {
 /// Refuses templates holding a literal secret, and templates whose [`approval_hash`]
 /// is not in `approvals.toml`. Warns when the tracker guide changed since compiling.
 pub fn check(templates: &config::Commands, top: &Path) -> Result<Vec<String>> {
-    for (name, template) in named(templates) {
-        if literal_secret(template) {
-            bail!(
-                "the `{name}` template in [tracker.commands] holds what looks like a literal \
-                 secret; reference an environment variable instead"
-            );
-        }
-    }
+    refuse_secrets(templates)?;
     let hash = approval_hash(templates);
-    let path = config::machine_dir()?.join("approvals.toml");
-    if !approvals(&path)?.approved.iter().any(|a| a.hash == hash) {
+    let path = approvals_path()?;
+    if !approved(&hash)? {
         bail!(
             "the [tracker.commands] templates are not approved ({hash}); review them, then \
              approve them by adding `[[approved]]` with `hash = \"{hash}\"` to {}",
@@ -214,8 +212,21 @@ pub fn check(templates: &config::Commands, top: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+/// Refuses templates holding what looks like a literal secret.
+pub fn refuse_secrets(templates: &config::Commands) -> Result<()> {
+    for (name, template) in named(templates) {
+        if literal_secret(template) {
+            bail!(
+                "the `{name}` template in [tracker.commands] holds what looks like a literal \
+                 secret; reference an environment variable instead"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The templates that are set, by name, in a fixed order.
-fn named(t: &config::Commands) -> Vec<(&'static str, &str)> {
+pub fn named(t: &config::Commands) -> Vec<(&'static str, &str)> {
     let required = [
         ("get_spec", &t.get_spec),
         ("list_tickets", &t.list_tickets),
@@ -261,6 +272,31 @@ struct Approvals {
 #[derive(Deserialize)]
 struct Approval {
     hash: String,
+}
+
+fn approvals_path() -> Result<PathBuf> {
+    Ok(config::machine_dir()?.join("approvals.toml"))
+}
+
+/// Whether `hash` (an [`approval_hash`]) is in the approvals file.
+pub fn approved(hash: &str) -> Result<bool> {
+    Ok(approvals(&approvals_path()?)?
+        .approved
+        .iter()
+        .any(|a| a.hash == hash))
+}
+
+/// Appends `hash` to the approvals file as one `[[approved]]` entry.
+pub fn approve(hash: &str) -> Result<()> {
+    let path = approvals_path()?;
+    fs::create_dir_all(config::machine_dir()?)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    writeln!(file, "[[approved]]\nhash = \"{hash}\"")
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 fn approvals(path: &Path) -> Result<Approvals> {
