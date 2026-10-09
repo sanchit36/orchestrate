@@ -730,6 +730,7 @@ dependencies = [
  "anyhow",
  "clap",
  "jiff",
+ "libc",
  "notify-rust",
  "serde",
  "serde_json",

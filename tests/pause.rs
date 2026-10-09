@@ -44,16 +44,10 @@ fn run_log(s: &Scratch) -> String {
     fs::read_to_string(runs.join(s.run_id()).join("logs/run.log")).unwrap()
 }
 
-/// The run log once the run has created it; `None` until then, rather than a panic that
-/// would leave the paused run waiting forever for the tracker to come back.
+/// The one run's `run.log` while the run may still be creating its dirs, if it exists yet.
 fn run_log_so_far(s: &Scratch) -> Option<String> {
-    let runs = fs::read_dir(s.state_root())
-        .ok()?
-        .next()?
-        .ok()?
-        .path()
-        .join("runs");
-    let run = fs::read_dir(runs).ok()?.next()?.ok()?.path();
+    let first = |dir: &std::path::Path| Some(fs::read_dir(dir).ok()?.next()?.ok()?.path());
+    let run = first(&first(&s.state_root())?.join("runs"))?;
     fs::read_to_string(run.join("logs/run.log")).ok()
 }
 

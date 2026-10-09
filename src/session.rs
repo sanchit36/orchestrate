@@ -10,24 +10,18 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
 
-/// Process groups of the sessions running now, killed if orchestrate is interrupted.
+/// Process groups of the sessions running now, killed if the run is stopped.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-/// On SIGINT, SIGTERM or SIGHUP: kill every running session's process group, then exit.
-pub fn kill_sessions_on_interrupt() -> Result<()> {
-    let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP])?;
-    std::thread::spawn(move || {
-        if let Some(signal) = signals.forever().next() {
-            for pgid in LIVE.lock().unwrap_or_else(|e| e.into_inner()).iter() {
-                kill_group(*pgid);
-            }
-            std::process::exit(128 + signal);
-        }
-    });
-    Ok(())
+/// Kill every running session's process group, and start no more in this process:
+/// the caller is about to exit.
+pub fn kill_all() {
+    let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+    for pgid in live.iter() {
+        kill_group(*pgid);
+    }
+    std::mem::forget(live);
 }
 
 /// Run headless `claude -p` in `worktree`, in its own process group, with the prompt
