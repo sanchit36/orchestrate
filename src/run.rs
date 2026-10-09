@@ -13,7 +13,7 @@ use crate::report::Report;
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, RunDirs, State, TicketState};
-use crate::tracker::{self, Ticket, Tracker};
+use crate::tracker::{self, Pausing, Ticket, Tracker};
 use crate::{control, planner, prompt, session, worktree};
 
 pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
@@ -42,7 +42,12 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     ));
 
     // The tracker reads and writes back in the integration worktree, never the user's checkout.
-    let tracker = tracker::open(&config, &integration_wt);
+    // A tracker failure pauses the run until the tracker answers again.
+    let tracker = Pausing::new(
+        tracker::open(&config, &integration_wt),
+        &config.tracker,
+        Events::open(&dirs.logs.join("run.log"))?,
+    );
     let into = Integration {
         worktree: &integration_wt,
         branch,
@@ -52,11 +57,11 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         config: &config,
         dirs: &dirs,
         into: &into,
-        tracker: tracker.as_ref(),
+        tracker: &tracker,
     };
     let mut tried = HashSet::new();
     loop {
-        let reading = spec::reread(tracker.as_ref(), spec_id, headings)?;
+        let reading = spec::reread(&tracker, spec_id, headings)?;
         for t in reading.tickets.iter().map(|e| &e.ticket) {
             let seen = state.tickets.entry(t.id.clone()).or_insert(TicketState {
                 title: t.title.clone(),
@@ -117,6 +122,11 @@ impl Run<'_> {
         let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
         worktree::create(self.top, &wt, &branch, self.into.branch)?;
         events.event(&format!("ticket {} started: {}", ticket.id, ticket.title));
+        let prepare_log = self.dirs.logs.join(format!("{slug}.prepare.log"));
+        if let Some(reason) = worktree::prepare(self.top, &wt, self.config, &prepare_log)? {
+            events.event(&format!("ticket {} failed: {reason}", ticket.id));
+            return Ok("failed");
+        }
 
         let session = &self.config.session;
         let prompt = prompt::render(session, self.top, &reading.spec.body, &ticket.body, &branch)?;

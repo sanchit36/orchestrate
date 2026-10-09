@@ -1,12 +1,14 @@
 //! Worktree manager: creates and tears down worktrees and their branches under the
 //! state dir. Nothing is ever checked out in the user's working copy.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 
+use crate::config::RepoConfig;
 use crate::git::{git, succeeds};
 use crate::report::REPORT_FILE;
 
@@ -49,6 +51,44 @@ pub fn remove(top: &Path, path: &Path, branch: &str) -> Result<()> {
     )?;
     git(top, &["branch", "-D", branch])?;
     Ok(())
+}
+
+/// Make the fresh worktree at `wt` ready for its session: initialise submodules, copy
+/// each seed file from the primary checkout `top`, then run `prepare` with its output
+/// to `log`. Returns why preparation failed, if it did.
+pub fn prepare(top: &Path, wt: &Path, config: &RepoConfig, log: &Path) -> Result<Option<String>> {
+    if wt.join(".gitmodules").exists()
+        && let Err(e) = git(wt, &["submodule", "update", "--init", "--recursive"])
+    {
+        return Ok(Some(format!("submodule init failed: {e:#}")));
+    }
+    for file in &config.seed_files {
+        let (from, to) = (top.join(file), wt.join(file));
+        if !from.is_file() {
+            return Ok(Some(format!(
+                "seeding failed: {} not found",
+                file.display()
+            )));
+        }
+        fs::create_dir_all(to.parent().unwrap())?;
+        fs::copy(&from, &to).with_context(|| format!("seeding {}", file.display()))?;
+    }
+    let Some(cmd) = &config.prepare else {
+        return Ok(None);
+    };
+    let out = File::create(log).with_context(|| format!("creating {}", log.display()))?;
+    let status = Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(wt)
+        .stdout(out.try_clone()?)
+        .stderr(out)
+        .status()
+        .context("running prepare")?;
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Ok(Some(format!("prepare exited {code}")));
+    }
+    Ok(None)
 }
 
 /// Git has no per-worktree exclude file, so the report is excluded in the shared

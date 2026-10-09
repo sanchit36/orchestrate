@@ -2,12 +2,15 @@
 //! Ids are opaque strings; any translation stays inside the adapter.
 
 mod local_markdown;
+mod pausing;
 
 use std::path::Path;
 
 use anyhow::Result;
 
 use crate::config::{RepoConfig, TrackerKind};
+
+pub use pausing::Pausing;
 
 pub struct Spec {
     pub id: String,
