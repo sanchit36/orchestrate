@@ -44,6 +44,19 @@ fn run_log(s: &Scratch) -> String {
     fs::read_to_string(runs.join(s.run_id()).join("logs/run.log")).unwrap()
 }
 
+/// The run log once the run has created it; `None` until then, rather than a panic that
+/// would leave the paused run waiting forever for the tracker to come back.
+fn run_log_so_far(s: &Scratch) -> Option<String> {
+    let runs = fs::read_dir(s.state_root())
+        .ok()?
+        .next()?
+        .ok()?
+        .path()
+        .join("runs");
+    let run = fs::read_dir(runs).ok()?.next()?.ok()?.path();
+    fs::read_to_string(run.join("logs/run.log")).ok()
+}
+
 /// Event messages without their `YYYY-MM-DD HH:MM:SS ` prefix.
 fn events(out: &str) -> Vec<&str> {
     out.lines().map(|l| &l[20..]).collect()
@@ -105,8 +118,7 @@ fn a_tracker_that_stops_answering_pauses_new_starts_until_it_answers_again() {
         let run = scope.spawn(|| s.run(&["run", "auth", "--branch", "int"]));
         // The user notices the pause and brings the tracker back.
         let log = loop {
-            let log = s.state_root().exists().then(|| run_log(&s));
-            if let Some(log) = log.filter(|l| l.contains("run paused")) {
+            if let Some(log) = run_log_so_far(&s).filter(|l| l.contains("run paused")) {
                 break log;
             }
             assert!(!run.is_finished(), "the run ended without pausing");
