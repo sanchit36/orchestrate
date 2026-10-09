@@ -1,24 +1,70 @@
-//! Spec reader: turns adapter answers into one reading of a spec and its tickets.
+//! Spec reader: turns adapter answers into one reading of a spec and its tickets,
+//! and classifies what it finds: refuse (an error), hold back a ticket, or warn.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
+use crate::markdown::{self, Criterion};
 use crate::tracker::{Blocker, Spec, Ticket, Tracker};
 
 pub struct Reading {
     pub spec: Spec,
-    /// Tickets in tracker order, each with its blockers.
-    pub tickets: Vec<(Ticket, Vec<Blocker>)>,
+    /// Tickets in tracker order.
+    pub tickets: Vec<Entry>,
+    /// Problems that never stop or hold anything, such as missing criteria.
+    pub warnings: Vec<String>,
 }
 
-pub fn read(tracker: &dyn Tracker, spec: &str) -> Result<Reading> {
+pub struct Entry {
+    pub ticket: Ticket,
+    pub blockers: Vec<Blocker>,
+    #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
+    pub criteria: Vec<Criterion>,
+    /// Why this ticket is held back (with every ticket blocked by it), if it is.
+    pub hold: Option<String>,
+}
+
+pub fn read(tracker: &dyn Tracker, spec: &str, criteria_headings: &[String]) -> Result<Reading> {
     let spec = tracker.get_spec(spec)?;
+    let mut warnings = Vec::new();
     let tickets = tracker
         .list_tickets(&spec.id)?
         .into_iter()
-        .map(|t| {
-            let blockers = tracker.list_blockers(&t.id)?;
-            Ok((t, blockers))
+        .map(|ticket| {
+            let blockers = tracker.list_blockers(&ticket.id)?;
+            let criteria = markdown::criteria(&ticket.body, criteria_headings);
+            if !ticket.finished {
+                match &criteria {
+                    None => warnings.push(format!("{}: no acceptance criteria", ticket.id)),
+                    Some(c) if c.is_empty() => warnings.push(format!(
+                        "{}: acceptance criteria heading has no checkboxes",
+                        ticket.id
+                    )),
+                    Some(_) => {}
+                }
+            }
+            let unknown = blockers.iter().find(|b| b.finished.is_none());
+            let hold = if ticket.body.trim().is_empty() {
+                Some("empty body".to_string())
+            } else {
+                unknown.map(|b| format!("blocker {} not found", b.id))
+            };
+            Ok(Entry {
+                hold,
+                ticket,
+                blockers,
+                criteria: criteria.unwrap_or_default(),
+            })
         })
-        .collect::<Result<_>>()?;
-    Ok(Reading { spec, tickets })
+        .collect::<Result<Vec<Entry>>>()?;
+    if tickets.is_empty() {
+        bail!("spec `{}` has no tickets", spec.id);
+    }
+    if !tickets.iter().any(|e| e.ticket.ready && !e.ticket.finished) {
+        bail!("spec `{}` has no ready tickets", spec.id);
+    }
+    Ok(Reading {
+        spec,
+        tickets,
+        warnings,
+    })
 }

@@ -1,4 +1,5 @@
 mod config;
+mod markdown;
 mod planner;
 mod spec;
 mod tracker;
@@ -44,13 +45,28 @@ fn plan(spec_id: &str) -> Result<()> {
     let top = git_toplevel()?;
     let config = config::load(&top)?;
     let tracker = tracker::open(&config, &top);
-    let reading = spec::read(tracker.as_ref(), spec_id)?;
+    let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)?;
+    let plan = planner::plan(&reading)?;
     println!(
         "Spec {}: {}\n\nFrontier:",
         reading.spec.id, reading.spec.title
     );
-    for t in planner::frontier(&reading) {
+    for t in plan.frontier {
         println!("  {}  {}", t.id, t.title);
+    }
+    for (heading, list) in [("Waiting", plan.waiting), ("Needs attention", plan.held)] {
+        if !list.is_empty() {
+            println!("\n{heading}:");
+        }
+        for (t, why) in list {
+            println!("  {}  {}  ({why})", t.id, t.title);
+        }
+    }
+    if !reading.warnings.is_empty() {
+        println!("\nWarnings:");
+        for w in &reading.warnings {
+            println!("  {w}");
+        }
     }
     Ok(())
 }

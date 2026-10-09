@@ -19,19 +19,19 @@ pub struct Spec {
 pub struct Ticket {
     pub id: String,
     pub title: String,
-    #[expect(dead_code, reason = "contract field, first read by run (#17, #18)")]
     pub body: String,
     pub finished: bool,
     pub ready: bool,
 }
 
 pub struct Blocker {
-    #[expect(dead_code, reason = "contract field, first read by run (#17, #18)")]
     pub id: String,
-    pub finished: bool,
+    /// `None` when the blocker is not found on the tracker.
+    pub finished: Option<bool>,
 }
 
 /// The read operations of the adapter contract. Tickets come back in tracker order.
+/// `list_blockers` combines native links with the body forms (`markdown::blocked_by`).
 pub trait Tracker {
     fn get_spec(&self, spec: &str) -> Result<Spec>;
     fn list_tickets(&self, spec: &str) -> Result<Vec<Ticket>>;
