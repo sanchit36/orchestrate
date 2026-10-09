@@ -66,6 +66,23 @@ fn a_run_lands_the_ready_tickets_and_closes_ticks_and_comments_them() {
 }
 
 #[test]
+fn a_blocker_in_another_repo_is_looked_up_there() {
+    let (s, gh) = github_spec();
+    gh.set_body(13, &format!("Blocked by: other/lib#12\r\n\r\n{CRITERIA}"));
+
+    s.run(&["plan", "10"]).ok();
+
+    let calls = s.calls("gh");
+    let asked = |path: &str| calls.iter().any(|c| c == &format!("api -X GET {path}"));
+    assert!(asked("repos/other/lib/issues/12"), "{calls:?}");
+    // Only #12's own read, for its blockers.
+    let here = calls
+        .iter()
+        .filter(|c| *c == "api -X GET repos/acme/app/issues/12");
+    assert_eq!(here.count(), 1, "{calls:?}");
+}
+
+#[test]
 fn a_gh_call_past_the_tracker_timeout_is_killed_and_fails() {
     let (s, _gh) = github_spec();
     s.repo_config(

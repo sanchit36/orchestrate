@@ -308,7 +308,7 @@ fn check_gate(gate: &Gate) -> Result<()> {
 }
 
 /// A GitHub `location` goes into API paths, so it must be a plain `owner/repo`.
-fn check_github_repo(location: &str) -> Result<()> {
+pub fn check_github_repo(location: &str) -> Result<()> {
     let part = |p: &str| {
         let allowed = |c: char| c.is_ascii_alphanumeric() || "-_.".contains(c);
         !p.is_empty() && p != "." && p != ".." && p.chars().all(allowed)

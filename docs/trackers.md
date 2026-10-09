@@ -58,7 +58,7 @@ A `gh` call that runs past the `[tracker] timeout` (default 60 seconds) is kille
 - A closed ticket is finished.
   A ticket with the `ready` label is ready.
 - Blockers are the native "blocked by" dependencies plus the body forms, written as `#12`, `12`, `owner/repo#12` or an issue URL.
-  A reference to another repo is looked up by its number in `location`.
+  A blocker in another repo (`owner/repo#12`, or its issue URL) is looked up in that repo.
 - `mark_finished` closes the issue as completed, `comment` posts an issue comment, and `tick` edits the issue body.
 
 ## Local markdown
