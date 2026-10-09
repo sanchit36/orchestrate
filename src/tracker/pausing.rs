@@ -53,16 +53,16 @@ impl<'a> Pausing<'a> {
         };
         let mut events = self.events.borrow_mut();
         let mut wait = self.config.probe_backoff;
-        events.event(&format!(
-            "run paused: {op} failed: {}; next probe in {}",
-            one_line(&err),
-            human(wait)
-        ));
+        let paused = format!("run paused: {op} failed: {}", one_line(&err));
+        events.event(&format!("{paused}; next probe in {}", human(wait)));
+        events.notify(&paused);
         loop {
             sleep(wait);
             match f(tracker) {
                 Ok(v) => {
-                    events.event(&format!("run recovered: {op} succeeded"));
+                    let recovered = format!("run recovered: {op} succeeded");
+                    events.event(&recovered);
+                    events.notify(&recovered);
                     return Ok(v);
                 }
                 Err(err) => {

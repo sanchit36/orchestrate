@@ -34,6 +34,8 @@ impl Scratch {
             &s.home.join(".gitconfig"),
             "[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n",
         );
+        // No real desktop notifications from tests; `tests/notify.rs` turns them back on.
+        s.machine_config("version = 1\nnotifications = false\n");
         s.git(&["init", "-q", "-b", "main"]);
         s.git(&["commit", "-q", "--allow-empty", "-m", "init"]);
         s
@@ -188,6 +190,9 @@ printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_STATE_HOME")
+            // No D-Bus session bus, as on a headless Linux machine.
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env("XDG_RUNTIME_DIR", self.home.join("no-runtime-dir"))
             .stdin(Stdio::null())
             .output()
             .unwrap();
