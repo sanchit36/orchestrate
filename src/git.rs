@@ -23,6 +23,29 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?.trim_end().to_string())
 }
 
+/// The default branch of the `origin` remote, or `None` when there is no `origin`.
+/// Uses the local `origin/HEAD` when set, otherwise asks the remote (read only).
+pub fn origin_default_branch(dir: &Path) -> Result<Option<String>> {
+    let local = [
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+    ];
+    if let Ok(head) = git(dir, &local) {
+        return Ok(head.strip_prefix("origin/").map(String::from));
+    }
+    if !succeeds(dir, &["remote", "get-url", "origin"])? {
+        return Ok(None);
+    }
+    let out = git(dir, &["ls-remote", "--symref", "origin", "HEAD"])
+        .context("finding origin's default branch; set `protected_branches` to skip this")?;
+    Ok(out
+        .lines()
+        .find_map(|l| l.strip_prefix("ref: refs/heads/")?.strip_suffix("\tHEAD"))
+        .map(String::from))
+}
+
 /// Whether `git <args>` exits 0 in `dir`.
 pub fn succeeds(dir: &Path, args: &[&str]) -> Result<bool> {
     let out = Command::new("git")

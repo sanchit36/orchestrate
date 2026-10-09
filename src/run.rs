@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use crate::config::{self, RepoConfig};
-use crate::git::git;
+use crate::git::{self, git};
 use crate::integrator::{self, Integration, Landing};
 use crate::report::Report;
 use crate::reporting::Events;
@@ -21,6 +21,13 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let (config, machine) = config::load(top)?;
     if config.gates.is_empty() {
         bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
+    }
+    let protected = match &config.protected_branches {
+        Some(list) => list.clone(),
+        None => git::origin_default_branch(top)?.into_iter().collect(),
+    };
+    if protected.iter().any(|b| b == branch) {
+        bail!("`{branch}` is a protected branch; pass another --branch");
     }
     let headings = &config.criteria_headings;
     // Refuse a spec that cannot start before anything is created.
