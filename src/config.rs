@@ -4,15 +4,22 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
 
 /// Top-level keys of each file, besides `version`.
-const REPO_KEYS: &[&str] = &["tracker", "criteria_headings", "gates", "session"];
+const REPO_KEYS: &[&str] = &[
+    "tracker",
+    "criteria_headings",
+    "gates",
+    "session",
+    "protected_branches",
+];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
 
 #[derive(Deserialize)]
@@ -24,6 +31,8 @@ pub struct RepoConfig {
     pub gates: Vec<Gate>,
     #[serde(default)]
     pub session: SessionConfig,
+    /// Branches a run never writes; `None` means the remote's default branch.
+    pub protected_branches: Option<Vec<String>>,
 }
 
 /// `[[gates]]`: a shell command run in the rebased ticket worktree; exit 0 passes.
@@ -32,6 +41,30 @@ pub struct RepoConfig {
 pub struct Gate {
     pub name: String,
     pub run: String,
+    /// Globs against the ticket's changed files; empty means all files.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Folders (`*` allowed per segment); the gate runs once in each one the change touched.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+    /// Fixed working directory relative to the top level, for a gate without `dirs`.
+    pub cwd: Option<String>,
+    /// How long the gate may run before it is killed and fails.
+    #[serde(default = "default_gate_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
+    /// A shell command run after the gate in the same directory, even after a timeout.
+    pub teardown: Option<String>,
+}
+
+fn default_gate_timeout() -> Duration {
+    Duration::from_secs(20 * 60)
+}
+
+/// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    let text = String::deserialize(d)?;
+    let parsed: jiff::SignedDuration = text.parse().map_err(serde::de::Error::custom)?;
+    Duration::try_from(parsed).map_err(serde::de::Error::custom)
 }
 
 /// `[session]`: how sessions are launched and prompted.
@@ -111,10 +144,23 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
         }
         None => MachineConfig::default(),
     };
-    let repo = repo
+    let repo: RepoConfig = repo
         .try_into()
         .with_context(|| format!("{}", repo_path.display()))?;
+    for gate in &repo.gates {
+        check_gate(gate).with_context(|| format!("{}", repo_path.display()))?;
+    }
     Ok((repo, machine))
+}
+
+fn check_gate(gate: &Gate) -> Result<()> {
+    if !gate.dirs.is_empty() && gate.cwd.is_some() {
+        bail!("gate {}: set `dirs` or `cwd`, not both", gate.name);
+    }
+    for pattern in gate.paths.iter().chain(&gate.dirs) {
+        crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
+    }
+    Ok(())
 }
 
 fn machine_config_path() -> Result<PathBuf> {

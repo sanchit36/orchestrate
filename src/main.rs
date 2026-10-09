@@ -1,4 +1,5 @@
 mod config;
+mod gate;
 mod git;
 mod integrator;
 mod markdown;
