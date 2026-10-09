@@ -87,6 +87,27 @@ fn landing_ticks_then_comments_then_marks_finished() {
 }
 
 #[test]
+fn the_landing_comment_lists_each_gate_as_it_really_went() {
+    let s = Scratch::new();
+    spec(&s, "true");
+    s.repo_config(
+        "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n\n\
+         [[gates]]\nname = \"check\"\nrun = \"true\"\n\n\
+         [[gates]]\nname = \"docs\"\nrun = \"true\"\npaths = [\"docs/**\"]\n",
+    );
+    s.commit_all();
+    s.claude_lands();
+
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    let file = ticket_file(&s);
+    assert!(
+        log(&file).contains("Gates: check: passed, docs: skipped."),
+        "{file}"
+    );
+}
+
+#[test]
 fn criteria_edited_mid_session_are_left_alone_and_listed_as_mismatches() {
     let s = Scratch::new();
     spec(&s, "true");

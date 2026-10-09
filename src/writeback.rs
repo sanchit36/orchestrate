@@ -26,15 +26,16 @@ pub struct Written {
     pub problems: Vec<String>,
 }
 
-/// Tick `criteria` (all met, since the ticket landed), comment how it landed, then mark
-/// it finished. Only mark-finished can fail, and the tracker decides how (it pauses).
+/// Tick `criteria` (all met, since the ticket landed), comment how it landed (`gates`
+/// as `<name>: <result>`), then mark it finished. Only mark-finished can fail, and the
+/// tracker decides how (it pauses).
 pub fn landed(
     tracker: &dyn Tracker,
     cx: &Context,
     ticket: &str,
     criteria: &[String],
     merge: &str,
-    gates: &[&str],
+    gates: &[String],
 ) -> Result<Written> {
     let mut written = Written::default();
     if !criteria.is_empty() {
@@ -43,7 +44,6 @@ pub fn landed(
             Err(e) => written.problems.push(problem("tick", &e)),
         }
     }
-    let gates: Vec<String> = gates.iter().map(|g| format!("{g}: passed")).collect();
     let mut text = format!(
         "Landed on `{}` in merge commit `{}` by orchestrate run `{}`.\n\nGates: {}.\n",
         cx.branch,
@@ -150,7 +150,15 @@ mod tests {
     fn missing_optional_operations_are_skipped_and_noted() {
         let t = Minimal(RefCell::default());
         let texts = ["it works".to_string()];
-        let w = landed(&t, &cx(), "a", &texts, "0123456789abcdef", &["check"]).unwrap();
+        let w = landed(
+            &t,
+            &cx(),
+            "a",
+            &texts,
+            "0123456789abcdef",
+            &["check: passed".into()],
+        )
+        .unwrap();
         assert_eq!(t.0.borrow().as_slice(), ["finished a"]);
         assert_eq!(
             w.problems,

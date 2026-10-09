@@ -66,12 +66,20 @@ pub fn stop(top: &Path, run: Option<&str>) -> Result<()> {
 
 /// Re-launch this `run` in its own session, apart from the terminal, and return once
 /// it holds the repo lock, printing its run id and `run.log` path.
-pub fn detach(top: &Path, spec: &str, branch: &str) -> Result<()> {
+pub fn detach(
+    top: &Path,
+    spec: &str,
+    branch: &str,
+    max_parallel: Option<config::MaxParallel>,
+) -> Result<()> {
     let (_, machine) = config::load(top)?;
     let repo_dir = state::repo_dir(&machine, top)?;
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["run", spec, "--branch", branch])
-        .stdin(Stdio::null())
+    cmd.args(["run", spec, "--branch", branch]);
+    if let Some(max) = max_parallel {
+        cmd.args(["--max-parallel", &max.to_string()]);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     unsafe {
