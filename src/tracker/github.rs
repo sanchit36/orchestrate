@@ -5,9 +5,9 @@
 //! through `gh api` are made, so `gh` older than 2.94 (no `--parent` / `--blocked-by`)
 //! works, and issue numbers are all those paths need: no database id is ever looked up.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -15,10 +15,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{Blocker, Spec, Ticket, Tracker};
-use crate::markdown;
+use crate::{markdown, process};
 
 pub struct GitHub {
     pub gh: PathBuf,
+    /// How long one `gh` call may run.
+    pub timeout: Duration,
     /// `owner/name`.
     pub repo: String,
     pub ready: String,
@@ -64,23 +66,12 @@ impl GitHub {
         let path = format!("repos/{}/issues/{path}", self.repo);
         let what = || format!("gh api -X {method} {path}");
         let mut cmd = Command::new(&self.gh);
-        cmd.args(["api", "-X", method, &path])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(["api", "-X", method, &path]).stdin(Stdio::null());
         if input.is_some() {
             cmd.args(["--input", "-"]).stdin(Stdio::piped());
         }
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("running {}", self.gh.display()))?;
-        if let Some(input) = input {
-            let mut stdin = child.stdin.take().unwrap();
-            stdin
-                .write_all(input.to_string().as_bytes())
-                .with_context(what)?;
-        }
-        let out = child.wait_with_output().with_context(what)?;
+        let input = input.map(|i| i.to_string()).unwrap_or_default();
+        let out = process::output(&mut cmd, input.as_bytes(), self.timeout).with_context(what)?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             if err.contains("HTTP 404") {
@@ -249,6 +240,7 @@ mod contract {
             };
             let tracker = GitHub {
                 gh: dir.path().join("gh"),
+                timeout: std::time::Duration::from_secs(60),
                 repo: "acme/app".into(),
                 ready: "ready-for-agent".into(),
                 criteria_headings: HEADINGS.iter().map(|h| h.to_string()).collect(),

@@ -164,7 +164,7 @@ fn outcome(t: &TicketState) -> String {
 
 /// A failure's cause: `prepare`, `gate <name>`, `conflict`, or the reason itself.
 fn cause(reason: &str) -> String {
-    let prepare = ["submodule init failed", "seeding failed", "prepare exited"];
+    let prepare = ["submodule init failed", "seeding failed", "prepare "];
     if prepare.iter().any(|p| reason.starts_with(p)) {
         return "prepare".into();
     }

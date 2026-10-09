@@ -51,6 +51,7 @@ location = "owner/repo"
 
 It runs `gh api` with your existing `gh` login; orchestrate stores no credentials.
 Any `gh` version with `gh api` works.
+A `gh` call that runs past the `[tracker] timeout` (default 60 seconds) is killed and fails like any other tracker error.
 
 - The spec is an issue; its id is the issue number.
 - The tickets are the spec's native sub-issues, in sub-issue order (GitHub allows up to 100).
@@ -130,7 +131,7 @@ tick = "jira-json tick {id}"
 - `comment` gets the Markdown comment on stdin.
   `tick` gets a JSON array of criterion texts on stdin.
   Other templates get empty stdin.
-- It must exit 0 and print one JSON value on stdout, as in the schema below, within 60 seconds.
+- It must exit 0 and print one JSON value on stdout, as in the schema below, within the `[tracker] timeout` (default 60 seconds).
   On a non-zero exit (its stderr is shown), a timeout (its whole process group is killed) or output outside the schema, the operation fails.
 - Never put a credential in a template: reference an environment variable, such as `$JIRA_TOKEN`.
   Orchestrate refuses templates holding what looks like a literal token, password or `Bearer` credential.

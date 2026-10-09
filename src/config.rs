@@ -167,6 +167,10 @@ pub struct TrackerConfig {
     pub probe_backoff: Duration,
     #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
     pub probe_backoff_max: Duration,
+    /// How long one adapter call (a `gh` or template command) may run before it is
+    /// killed and fails.
+    #[serde(default = "default_tracker_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
     /// The templates of `kind = "commands"`, and only of that kind.
     pub commands: Option<Commands>,
 }
@@ -216,6 +220,10 @@ fn default_probe_backoff() -> Duration {
 
 fn default_probe_backoff_max() -> Duration {
     Duration::from_secs(5 * 60)
+}
+
+fn default_tracker_timeout() -> Duration {
+    Duration::from_secs(60)
 }
 
 /// A duration such as `"2s"`, `"5m"` or `"PT1M"`.

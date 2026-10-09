@@ -7,6 +7,7 @@ mod integrator;
 mod lock;
 mod markdown;
 mod planner;
+mod process;
 mod prompt;
 mod report;
 mod reporting;

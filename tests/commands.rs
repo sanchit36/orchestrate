@@ -86,6 +86,31 @@ fn run_refuses_unapproved_templates_before_starting() {
 }
 
 #[test]
+fn a_template_past_the_tracker_timeout_is_killed_and_fails() {
+    let s = Scratch::new();
+    tracker(&s);
+    let config: Vec<String> = templates(&s, "")
+        .lines()
+        .map(|l| match l {
+            l if l.starts_with("get_spec") => "get_spec = \"sleep 30\"".into(),
+            "location = \"fixture\"" => format!("{l}\ntimeout = \"1s\""),
+            l => l.into(),
+        })
+        .collect();
+    s.repo_config(&config.join("\n"));
+    approve(&s, &s.run(&["plan", "auth"]).fails());
+    let start = std::time::Instant::now();
+
+    let err = s.run(&["plan", "auth"]).fails();
+
+    assert!(
+        err.contains("get_spec template: timed out after 1s"),
+        "{err}"
+    );
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+}
+
+#[test]
 fn templates_go_with_the_commands_kind_only() {
     let s = Scratch::new();
     s.repo_config("version = 1\n\n[tracker]\nkind = \"commands\"\nlocation = \"x\"\n");

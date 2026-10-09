@@ -2,16 +2,13 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::config::Gate;
+use crate::process::sh;
 use crate::state::GateResult;
 
 /// A path glob: `*` stays within one path segment, `**` crosses them.
@@ -77,32 +74,6 @@ pub fn run_all(
         }
     }
     Ok((!ran).then(|| "no gate matched its change".to_string()))
-}
-
-/// Run `sh -c <cmd>` in `dir` in its own process group with output to `log`. Its exit
-/// status, or `None` when it outlived `timeout` and its group was killed.
-fn sh(cmd: &str, dir: &Path, log: &File, timeout: Duration) -> Result<Option<ExitStatus>> {
-    let mut child = Command::new("sh")
-        .args(["-c", cmd])
-        .current_dir(dir)
-        .process_group(0)
-        .stdout(log.try_clone()?)
-        .stderr(log.try_clone()?)
-        .spawn()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        if Instant::now() >= deadline {
-            Command::new("kill")
-                .args(["-KILL", "--", &format!("-{}", child.id())])
-                .status()?;
-            child.wait()?;
-            return Ok(None);
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
 }
 
 /// The working directories, relative to the worktree, `gate` runs in; none when its

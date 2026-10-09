@@ -64,6 +64,28 @@ fn a_run_lands_the_ready_tickets_and_closes_ticks_and_comments_them() {
 }
 
 #[test]
+fn a_gh_call_past_the_tracker_timeout_is_killed_and_fails() {
+    let (s, _gh) = github_spec();
+    s.repo_config(
+        "version = 1\n\n[tracker]\nkind = \"github\"\nlocation = \"acme/app\"\ntimeout = \"1s\"\n\n\
+         [[gates]]\nname = \"check\"\nrun = \"true\"\n",
+    );
+    let pid = s.bin.join("gh.pid");
+    s.fake(
+        "gh",
+        &format!("sleep 30 & echo $! > '{}'; wait", pid.display()),
+    );
+    let start = std::time::Instant::now();
+
+    let err = s.run(&["plan", "10"]).fails();
+
+    assert!(err.contains("timed out after 1s"), "{err}");
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    let pid = std::fs::read_to_string(pid).unwrap();
+    common::wait_until("gh's child killed", || !common::alive(pid.trim()));
+}
+
+#[test]
 fn a_github_location_must_be_owner_slash_repo() {
     let s = Scratch::new();
     s.repo_config("version = 1\n\n[tracker]\nkind = \"github\"\nlocation = \"acme\"\n");

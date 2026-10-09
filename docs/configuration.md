@@ -31,6 +31,7 @@ See [trackers.md](trackers.md) for what each kind reads and writes.
 | `retry_delay` | `"2s"` | The wait between the quick retries of a failed tracker operation (three tries in all). |
 | `probe_backoff` | `"60s"` | When the tracker keeps failing the run pauses; this is the first wait between probes. It doubles after each failed probe. |
 | `probe_backoff_max` | `"5m"` | The longest wait between probes of a paused run. |
+| `timeout` | `"60s"` | How long one `gh` call or command template may run before its process group is killed and the operation fails. |
 | `commands` | none | The `[tracker.commands]` templates. Required with `kind = "commands"` and refused with any other kind. |
 
 ### `tracker.commands`
@@ -102,6 +103,7 @@ Default: none.
 
 A shell command run in each fresh worktree before its session starts, such as `npm ci`.
 Its output goes to the ticket's `<ticket>.prepare.log` in the run logs, and a non-zero exit fails the ticket.
+It shares the session's `timeout`: past it, its process group is killed and the ticket fails.
 Git submodules are initialised before it runs.
 
 ### `protected_branches`
@@ -127,6 +129,7 @@ ready = "ready-for-agent"
 retry_delay = "2s"
 probe_backoff = "60s"
 probe_backoff_max = "5m"
+timeout = "60s"
 
 [[gates]]
 name = "test"
