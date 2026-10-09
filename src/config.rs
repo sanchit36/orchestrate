@@ -88,6 +88,8 @@ fn default_permission_mode() -> String {
 #[derive(Deserialize, Default)]
 pub struct MachineConfig {
     pub state_dir: Option<PathBuf>,
+    /// Desktop notifications; `None` means the default, on.
+    pub notifications: Option<bool>,
     /// The default for `--max-parallel`.
     #[serde(default)]
     pub max_parallel: MaxParallel,

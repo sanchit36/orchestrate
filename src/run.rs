@@ -36,7 +36,9 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
 
     session::kill_sessions_on_interrupt()?;
     let dirs = RunDirs::create(&machine, top, spec_id)?;
-    let mut events = Events::open(&dirs.logs.join("run.log"))?;
+    let notify = machine.notifications != Some(false);
+    let spec_slug = state::slug(spec_id);
+    let mut events = Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug);
     let mut state = State::new(&dirs.id, spec_id, branch);
     state.save(&dirs)?;
     let integration_wt = dirs.worktrees.join("_integration");
@@ -53,7 +55,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
     let tracker = Pausing::new(
         tracker::open(&config, &integration_wt),
         &config.tracker,
-        Events::open(&dirs.logs.join("run.log"))?,
+        Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug),
     );
     let into = Integration {
         worktree: &integration_wt,
@@ -142,6 +144,8 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
             running -= 1;
             let outcome = outcome?;
             let kind = outcome.kind;
+            let title = &state.tickets[&id].title;
+            events.notify(&format!("{id} {title}: {kind}"));
             set_outcome(&mut state, &id, outcome);
             if kind != "finished" {
                 block_dependents(&mut state, &reading, &id, kind, &mut events);
@@ -152,13 +156,15 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
     })?;
 
     let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
-    events.event(&format!(
+    let ended = format!(
         "run {} ended: {} finished, {} failed, {} stuck; integration branch {branch}",
         dirs.id,
         count("finished"),
         count("failed") + count("timeout"),
         count("stuck"),
-    ));
+    );
+    events.event(&ended);
+    events.notify(&ended);
     events.event(&format!("push it with: git push -u origin {branch}"));
     Ok(())
 }
