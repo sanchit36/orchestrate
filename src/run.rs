@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Result, bail};
 
@@ -190,10 +189,9 @@ impl Run<'_> {
         let session = &self.config.session;
         let prompt = prompt::render(session, self.top, &reading.spec.body, &ticket.body, &branch)?;
         let log = self.dirs.logs.join(format!("{slug}.session.log"));
-        let timeout = Duration::from_secs(session.timeout);
-        let Some(code) = session::run(&wt, &prompt, &session.permission_mode, timeout, &log)?
-        else {
-            let reason = format!("no exit after {}s", session.timeout);
+        let mode = &session.permission_mode;
+        let Some(code) = session::run(&wt, &prompt, mode, session.timeout, &log)? else {
+            let reason = format!("no exit after {:?}", session.timeout);
             events.event(&format!("ticket {} timeout: {reason}", ticket.id));
             return Ok(Outcome::because("timeout", reason));
         };

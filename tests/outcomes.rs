@@ -159,7 +159,7 @@ fn a_failed_ticket_keeps_its_worktree_and_branch_skips_dependents_and_others_con
 #[test]
 fn a_session_past_its_timeout_has_its_process_group_killed_and_times_out() {
     let s = Scratch::new();
-    spec(&s, "timeout = 1\n");
+    spec(&s, "timeout = \"1s\"\n");
     let pid = s.repo.parent().unwrap().join("grandchild.pid");
     claude(
         &s,
@@ -186,9 +186,9 @@ fn a_session_past_its_timeout_has_its_process_group_killed_and_times_out() {
 }
 
 #[test]
-fn the_session_timeout_is_a_whole_number_of_seconds() {
+fn the_session_timeout_is_a_duration_string() {
     let s = Scratch::new();
-    spec(&s, "timeout = \"45m\"\n");
+    spec(&s, "timeout = 45\n");
     claude(&s, "");
 
     let err = s.run(&["run", "auth", "--branch", "int"]).fails();
