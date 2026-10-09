@@ -131,6 +131,12 @@ pub struct TicketState {
     /// The criteria a stuck session reported unmet.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unmet: Vec<String>,
+    /// Criteria edited since dispatch, which landing left unticked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mismatches: Vec<String>,
+    /// Ticks and comments that failed or were skipped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub writeback: Vec<String>,
 }
 
 impl State {

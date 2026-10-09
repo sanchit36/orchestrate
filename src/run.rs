@@ -14,6 +14,7 @@ use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, RunDirs, State, TicketState};
 use crate::tracker::{self, Pausing, Ticket, Tracker};
+use crate::writeback::{self, Written};
 use crate::{control, planner, prompt, session, worktree};
 
 pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
@@ -54,12 +55,20 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         worktree: &integration_wt,
         branch,
     };
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut private = vec![(top, "<repo>"), (state_dir(&dirs), "<state>")];
+    private.extend(home.as_deref().map(|h| (h, "~")));
     let run = Run {
         top,
         config: &config,
         dirs: &dirs,
         into: &into,
         tracker: &tracker,
+        cx: writeback::Context {
+            run_id: &dirs.id,
+            branch,
+            private,
+        },
     };
     let mut tried = HashSet::new();
     loop {
@@ -70,6 +79,8 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
                 outcome: if t.finished { "finished" } else { "pending" }.into(),
                 reason: None,
                 unmet: Vec::new(),
+                mismatches: Vec::new(),
+                writeback: Vec::new(),
             });
             seen.title = t.title.clone();
         }
@@ -103,6 +114,11 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     );
     events.event(&ended);
     events.notify(&ended);
+    for (id, t) in &state.tickets {
+        for problem in &t.writeback {
+            events.event(&format!("ticket {id}: {problem}"));
+        }
+    }
     events.event(&format!("push it with: git push -u origin {branch}"));
     Ok(())
 }
@@ -113,6 +129,7 @@ struct Outcome {
     kind: &'static str,
     reason: Option<String>,
     unmet: Vec<String>,
+    written: Written,
 }
 
 impl Outcome {
@@ -121,6 +138,7 @@ impl Outcome {
             kind,
             reason: None,
             unmet: Vec::new(),
+            written: Written::default(),
         }
     }
 
@@ -137,6 +155,8 @@ fn set_outcome(state: &mut State, id: &str, outcome: Outcome) {
         t.outcome = outcome.kind.into();
         t.reason = outcome.reason;
         t.unmet = outcome.unmet;
+        t.mismatches = outcome.written.mismatches;
+        t.writeback = outcome.written.problems;
     }
 }
 
@@ -177,11 +197,23 @@ struct Run<'a> {
     dirs: &'a RunDirs,
     into: &'a Integration<'a>,
     tracker: &'a dyn Tracker,
+    cx: writeback::Context<'a>,
 }
 
 impl Run<'_> {
-    /// Work one ticket from worktree to landing; returns its outcome.
+    /// Work one ticket and write its outcome back to the tracker.
     fn work(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
+        let mut outcome = self.attempt(reading, ticket, events)?;
+        if outcome.kind != "finished" {
+            let reason = outcome.reason.as_deref();
+            outcome.written =
+                writeback::outcome(self.tracker, &self.cx, &ticket.id, outcome.kind, reason);
+        }
+        Ok(outcome)
+    }
+
+    /// Work one ticket from worktree to landing; returns its outcome.
+    fn attempt(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
         let slug = state::slug(&ticket.id);
         let wt = self.dirs.worktrees.join(&slug);
         let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
@@ -236,14 +268,25 @@ impl Run<'_> {
         };
         match landing {
             Landing::Merged(sha) => {
-                self.tracker.mark_finished(&ticket.id)?;
+                let entry = reading.tickets.iter().find(|e| e.ticket.id == ticket.id);
+                let criteria: Vec<String> = entry
+                    .iter()
+                    .flat_map(|e| &e.criteria)
+                    .map(|c| c.text.clone())
+                    .collect();
+                let gates: Vec<&str> = self.config.gates.iter().map(|g| g.name.as_str()).collect();
+                let written =
+                    writeback::landed(self.tracker, &self.cx, &ticket.id, &criteria, &sha, &gates)?;
                 worktree::remove(self.top, &wt, &branch)?;
                 events.event(&format!(
                     "ticket {} finished: merged {}",
                     ticket.id,
                     &sha[..12]
                 ));
-                Ok(Outcome::new("finished"))
+                Ok(Outcome {
+                    written,
+                    ..Outcome::new("finished")
+                })
             }
             Landing::Failed(reason) => {
                 events.event(&format!("ticket {} failed: {reason}", ticket.id));
@@ -263,8 +306,16 @@ fn stuck(ticket: &Ticket, report: Report, events: &mut Events) -> Outcome {
     }
     events.event(&format!("ticket {} stuck: {}", ticket.id, cause.join("; ")));
     Outcome {
-        kind: "stuck",
         reason: (!notes.is_empty()).then(|| notes.to_string()),
         unmet,
+        ..Outcome::new("stuck")
     }
+}
+
+/// The per-repo state dir holding this run's state, logs and worktrees.
+fn state_dir(dirs: &RunDirs) -> &Path {
+    dirs.worktrees
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(&dirs.run)
 }

@@ -14,6 +14,7 @@ mod spec;
 mod state;
 mod tracker;
 mod worktree;
+mod writeback;
 
 use std::io::Write;
 use std::path::PathBuf;

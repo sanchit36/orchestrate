@@ -21,15 +21,15 @@ fn chain() -> Scratch {
     s
 }
 
-/// A pre-commit hook that fails the first `n` commits made in the integration worktree,
-/// which is where the local markdown tracker commits mark-finished.
+/// A commit-msg hook that fails the first `n` mark-finished commits, which the local
+/// markdown tracker makes in the integration worktree.
 fn failing_commits(s: &Scratch, n: u32) {
-    let hook = s.repo.join(".git/hooks/pre-commit");
+    let hook = s.repo.join(".git/hooks/commit-msg");
     let count = s.bin.join("hook.count");
     fs::write(
         &hook,
         format!(
-            "#!/bin/sh\ncase \"$PWD\" in */_integration) ;; *) exit 0;; esac\n\
+            "#!/bin/sh\ncase \"$(head -n 1 \"$1\")\" in Mark*) ;; *) exit 0;; esac\n\
              n=$(($(cat '{c}' 2>/dev/null || echo 0) + 1))\necho $n > '{c}'\n\
              [ $n -gt {n} ] || {{ echo tracker down >&2; exit 1; }}\n",
             c = count.display()
