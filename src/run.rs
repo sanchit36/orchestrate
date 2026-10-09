@@ -65,7 +65,11 @@ pub fn preflight(top: &Path, config: &RepoConfig, branch: &str) -> Result<()> {
     }
     let protected = match &config.protected_branches {
         Some(list) => list.clone(),
-        None => git::origin_default_branch(top)?.into_iter().collect(),
+        // Without a remote default branch, the branch the user has checked out.
+        None => (git::origin_default_branch(top)?)
+            .or_else(|| git::current_branch(top))
+            .into_iter()
+            .collect(),
     };
     if protected.iter().any(|b| b == branch) {
         bail!("`{branch}` is a protected branch; pass another --branch");

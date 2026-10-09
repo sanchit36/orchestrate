@@ -46,6 +46,11 @@ pub fn origin_default_branch(dir: &Path) -> Result<Option<String>> {
         .map(String::from))
 }
 
+/// The branch checked out in `dir`, or `None` on a detached `HEAD`.
+pub fn current_branch(dir: &Path) -> Option<String> {
+    git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok()
+}
+
 /// Each entry of `git status` in `dir`: tracked changes and untracked, not ignored, files.
 pub fn changes(dir: &Path) -> Result<Vec<String>> {
     let out = git(

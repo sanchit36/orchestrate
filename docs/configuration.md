@@ -108,7 +108,7 @@ Git submodules are initialised before it runs.
 
 ### `protected_branches`
 
-Default: the remote `origin`'s default branch, or none when there is no `origin`.
+Default: the remote `origin`'s default branch; without one (no `origin`, or an `origin` with no default branch), the branch checked out in your checkout when the run starts.
 
 Branches a run never writes.
 `run --branch` refuses a protected branch as its integration branch.

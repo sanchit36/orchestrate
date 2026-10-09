@@ -107,7 +107,7 @@ Sessions run unattended, so orchestrate decides what they may do and what lands.
   Gates check exactly the commit that merges: a session that leaves changes uncommitted in its worktree fails its ticket.
 - **Work lands on one integration branch.**
   Tickets are merged into the branch you name with `--branch`, for you to review and push.
-  Protected branches (by default `origin`'s default branch, see `protected_branches`) are refused as the integration branch, and `clean` never touches an integration branch.
+  Protected branches (by default `origin`'s default branch, else your checked-out branch; see `protected_branches`) are refused as the integration branch, and `clean` never touches an integration branch.
 - **Only ready tickets start.**
   A ticket starts only when its tracker carries the ready marker and its blockers have finished.
 - **The tracker is reached deterministically.**
