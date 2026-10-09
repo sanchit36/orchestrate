@@ -48,7 +48,10 @@ pub fn origin_default_branch(dir: &Path) -> Result<Option<String>> {
 
 /// Each entry of `git status` in `dir`: tracked changes and untracked, not ignored, files.
 pub fn changes(dir: &Path) -> Result<Vec<String>> {
-    let out = git(dir, &["status", "--porcelain", "-z", "--untracked-files=all"])?;
+    let out = git(
+        dir,
+        &["status", "--porcelain", "-z", "--untracked-files=all"],
+    )?;
     Ok(out.split_terminator('\0').map(String::from).collect())
 }
 

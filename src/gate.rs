@@ -27,7 +27,7 @@ pub fn glob(pattern: &str) -> Result<GlobMatcher> {
 /// files. Each gate's output goes to `<logs>/<slug>.gate-<name>.log`, and each gate
 /// that runs gets one entry in `results`: its first failing exit code (-1 for a
 /// timeout), else 0. The first failure's reason, or `None` when every gate passed or
-/// was skipped.
+/// was skipped and at least one ran: nothing lands unchecked.
 pub fn run_all(
     gates: &[Gate],
     wt: &Path,
@@ -36,11 +36,13 @@ pub fn run_all(
     slug: &str,
     results: &mut Vec<GateResult>,
 ) -> Result<Option<String>> {
+    let mut ran = false;
     for gate in gates {
         let places = places(gate, wt, changed)?;
         if places.is_empty() {
             continue;
         }
+        ran = true;
         let log = logs.join(format!("{slug}.gate-{}.log", gate.name));
         let out = File::create(&log).with_context(|| format!("creating {}", log.display()))?;
         let mut failure = None;
@@ -74,7 +76,7 @@ pub fn run_all(
             return Ok(Some(reason));
         }
     }
-    Ok(None)
+    Ok((!ran).then(|| "no gate matched its change".to_string()))
 }
 
 /// Run `sh -c <cmd>` in `dir` in its own process group with output to `log`. Its exit
@@ -116,11 +118,13 @@ fn places(gate: &Gate, wt: &Path, changed: &[String]) -> Result<Vec<String>> {
         .iter()
         .filter(|f| globs.is_empty() || globs.iter().any(|g| g.is_match(f)))
         .collect();
-    if changed.is_empty() {
-        return Ok(vec![]);
-    }
     if gate.dirs.is_empty() {
-        return Ok(vec![gate.cwd.clone().unwrap_or_default()]);
+        // A gate without `paths` checks every change, even one that touches no file.
+        let runs = globs.is_empty() || !changed.is_empty();
+        return Ok(runs
+            .then(|| gate.cwd.clone().unwrap_or_default())
+            .into_iter()
+            .collect());
     }
     let mut dirs = BTreeSet::new();
     for pattern in &gate.dirs {

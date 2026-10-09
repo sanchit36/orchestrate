@@ -75,6 +75,8 @@ Gates run in the order listed; exit 0 passes, and the first failure stops the ti
 | `teardown` | none | A command run after the gate in the same directory, even after a failure or timeout. Its exit status does not decide the gate. |
 
 A ticket that changes no file matching a gate's `paths` skips that gate.
+A gate without `paths` and without `dirs` always runs, even on a ticket whose commits change no file.
+Nothing lands unchecked: a ticket on which every gate was skipped fails with `no gate matched its change`.
 
 ### `session`
 

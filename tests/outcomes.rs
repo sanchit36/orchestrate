@@ -122,7 +122,10 @@ fn a_done_report_leaving_out_a_criterion_is_stuck_with_that_criterion_unmet() {
         st["tickets"]["a"]["unmet"],
         serde_json::json!(["it migrates"])
     );
-    assert!(out.contains("ticket a stuck: unmet: it migrates\n"), "{out}");
+    assert!(
+        out.contains("ticket a stuck: unmet: it migrates\n"),
+        "{out}"
+    );
     assert!(!merged(&s).contains("Add schema"));
     assert_eq!(s.calls("gate").len(), 1, "only c is gated");
 }
@@ -288,8 +291,14 @@ fn alive(pid: &str) -> bool {
 fn changes_the_session_left_uncommitted_fail_the_ticket_before_any_gate_or_conflict_session() {
     let done = report("done", true, "");
     for (arm, left) in [
-        (format!("a) {COMMIT}; echo x > extra.txt; {done};;"), "extra.txt"),
-        (format!("a) {COMMIT}; echo more >> a.txt; {done};;"), "a.txt"),
+        (
+            format!("a) {COMMIT}; echo x > extra.txt; {done};;"),
+            "extra.txt",
+        ),
+        (
+            format!("a) {COMMIT}; echo more >> a.txt; {done};;"),
+            "a.txt",
+        ),
     ] {
         let s = Scratch::new();
         spec(&s, "");

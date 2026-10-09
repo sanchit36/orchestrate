@@ -82,6 +82,48 @@ fn a_gate_runs_only_when_the_ticket_changed_files_matching_its_paths() {
     s.git(&["cat-file", "-e", "int:src/deep/lib.rs"]);
 }
 
+#[test]
+fn a_gate_without_paths_checks_a_ticket_whose_commits_change_no_files() {
+    let s = ticket_with_gates(
+        "[[gates]]\nname = \"docs\"\nrun = 'echo docs >> {GATES}'\npaths = [\"docs/**\"]\n\n\
+         [[gates]]\nname = \"all\"\nrun = 'echo all >> {GATES}'\n",
+        &[],
+    );
+    s.fake(
+        "claude",
+        "git commit -q --allow-empty -m nothing\n\
+         printf '{\"status\":\"done\",\"acceptance_criteria\":[{\"text\":\"it works\",\"met\":true}]}' \
+         > .orchestrate-result.json",
+    );
+
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert_eq!(gate_lines(&s), ["all"]);
+    assert!(run_log(&s).contains("ticket a finished"));
+}
+
+#[test]
+fn a_ticket_no_gate_checked_fails_instead_of_landing_unchecked() {
+    let s = ticket_with_gates(
+        "[[gates]]\nname = \"docs\"\nrun = 'echo docs >> {GATES}'\npaths = [\"docs/**\"]\n",
+        &["src/lib.rs"],
+    );
+
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(gate_lines(&s).is_empty());
+    let log = run_log(&s);
+    assert!(
+        log.contains("ticket a failed: no gate matched its change"),
+        "{log}"
+    );
+    assert!(
+        s.git(&["ls-tree", "-r", "--name-only", "int"])
+            .lines()
+            .all(|f| f != "src/lib.rs")
+    );
+}
+
 /// The working directories gates recorded with `pwd`, relative to the ticket worktree.
 fn gate_dirs(s: &Scratch) -> Vec<String> {
     gate_lines(s)
