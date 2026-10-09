@@ -46,6 +46,14 @@ _Avoid_: job, execution
 A detached, top-level agent process working one ticket in its own worktree; it may start its own subagents.
 _Avoid_: worker, subagent
 
+**Report**:
+What a session hands back when it exits: done or stuck, a verdict on each acceptance criterion, and notes; never trusted alone, since gates decide.
+_Avoid_: result file, result contract
+
+**Stuck**:
+The outcome of a session that reports it cannot go on without a human; distinct from a ticket being blocked by another ticket.
+_Avoid_: blocked
+
 **Integration branch**:
 The single branch where a run lands every ticket's gated work, for a human to review.
 _Avoid_: staging branch, feature branch
