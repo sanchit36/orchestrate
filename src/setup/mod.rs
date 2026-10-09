@@ -202,11 +202,11 @@ fn verify(config: &RepoConfig, top: &Path, spec_id: &str) -> Result<()> {
         eprintln!("orchestrate: warning: {warning}");
     }
     let tracker = tracker::open(config, top);
-    let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)
+    let reading = spec::read_to_start(tracker.as_ref(), spec_id, &config.criteria_headings)
         .context("verification failed; nothing written")?;
     println!();
     let plan = planner::plan(&reading).context("verification failed; nothing written")?;
-    // `spec::read` refuses a spec without a ready ticket, so the frontier or the list has one.
+    // `spec::read_to_start` refuses a spec without a ready ticket, so the frontier or the list has one.
     let sample = (plan.frontier.first().copied())
         .unwrap_or(&reading.tickets[0].ticket)
         .id

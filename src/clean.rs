@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::git::git;
-use crate::state::{self, State};
+use crate::state::{self, Outcome, RunStatus, State};
 use crate::{config, lock, worktree};
 
 pub struct Flags {
@@ -29,7 +29,10 @@ pub fn clean(top: &Path, run: Option<&str>, flags: &Flags) -> Result<()> {
     let runs = state::runs(&repo_dir)?;
     let live = lock::live(&repo_dir)?.map(|h| h.run);
     let targets = match flags.all {
-        true => runs.into_iter().filter(|s| s.status == "ended").collect(),
+        true => runs
+            .into_iter()
+            .filter(|s| s.status == RunStatus::Ended)
+            .collect(),
         false => vec![state::resolve(runs, run)?],
     };
     for s in &targets {
@@ -52,11 +55,11 @@ pub fn clean(top: &Path, run: Option<&str>, flags: &Flags) -> Result<()> {
 fn one(top: &Path, repo_dir: &Path, s: &State, force: bool) -> Result<()> {
     let dir = repo_dir.join("worktrees").join(&s.run_id);
     // Worktree name -> (ticket, outcome) of each ticket's latest attempt kept as evidence.
-    let kept: HashMap<String, (&str, &str)> = (s.tickets.iter())
-        .filter(|(_, t)| !force && ["failed", "timeout", "stuck"].contains(&t.outcome.as_str()))
+    let kept: HashMap<String, (&str, Outcome)> = (s.tickets.iter())
+        .filter(|(_, t)| !force && t.outcome.kept())
         .filter_map(|(id, t)| {
             let name = t.worktree.as_ref()?.file_name()?.to_string_lossy();
-            Some((name.into_owned(), (id.as_str(), t.outcome.as_str())))
+            Some((name.into_owned(), (id.as_str(), t.outcome)))
         })
         .collect();
     let prefix = format!("orchestrate/{}/", s.run_id);

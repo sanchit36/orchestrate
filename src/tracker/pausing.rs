@@ -10,7 +10,7 @@ use anyhow::Result;
 
 use super::{Blocker, Spec, Ticket, Tracker, Unsupported};
 use crate::config::TrackerConfig;
-use crate::reporting::Events;
+use crate::events::Events;
 
 const ATTEMPTS: u32 = 3;
 

@@ -6,13 +6,14 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use crate::config::{self, RepoConfig};
+use crate::events::Events;
 use crate::git;
 use crate::report;
-use crate::reporting::Events;
-use crate::run::{self, gate_lines};
+use crate::run;
 use crate::spec;
-use crate::state::{self, RunDirs, State, Store};
+use crate::state::{self, Outcome, RunDirs, RunStatus, State, Store};
 use crate::tracker::Tracker;
+use crate::work::gate_lines;
 use crate::writeback;
 
 pub fn resume(top: &Path, run: Option<&str>) -> Result<()> {
@@ -25,13 +26,13 @@ pub fn resume(top: &Path, run: Option<&str>) -> Result<()> {
     let dirs = RunDirs::open(&repo_dir, id)?;
     // Read again under the lock: a run that was live a moment ago has saved its last state.
     let mut state = State::load(&dirs.run)?;
-    if state.status == "ended" {
+    if state.status == RunStatus::Ended {
         bail!(
             "run {} has ended; start a new one with `orchestrate run`",
             dirs.id
         );
     }
-    (state.status, state.paused) = ("running".into(), None);
+    (state.status, state.paused) = (RunStatus::Running, None);
     let started = [format!(
         "run {} resumed: spec {}, integration branch {}",
         dirs.id, state.spec, state.branch
@@ -63,27 +64,23 @@ fn reconcile(
     integration: &Path,
     spec_id: &str,
 ) -> Result<HashSet<String>> {
-    let reading = spec::reread(tracker, spec_id, &config.criteria_headings)?;
-    let recorded: Vec<(String, String, Option<String>)> = store.update(|s| {
-        (s.tickets.iter())
-            .map(|(id, t)| (id.clone(), t.outcome.clone(), t.merged.clone()))
-            .collect()
-    })?;
+    let reading = spec::read(tracker, spec_id, &config.criteria_headings)?;
+    let recorded = store.update(|s| s.tickets.clone())?;
     let mut tried = HashSet::new();
-    for (id, outcome, merged) in recorded {
-        let entry = reading.tickets.iter().find(|e| e.ticket.id == id);
+    for (id, t) in &recorded {
+        let entry = reading.tickets.iter().find(|e| &e.ticket.id == id);
         let on_tracker = entry.is_some_and(|e| e.ticket.finished);
-        let (kind, reason) = match merged {
+        let (outcome, reason) = match &t.merged {
             Some(sha)
-                if !git::succeeds(integration, &["merge-base", "--is-ancestor", &sha, "HEAD"])? =>
+                if !git::succeeds(integration, &["merge-base", "--is-ancestor", sha, "HEAD"])? =>
             {
                 let reason = format!(
                     "merge {} is missing from the integration branch",
                     &sha[..12]
                 );
-                ("failed", Some(reason))
+                (Outcome::Failed, Some(reason))
             }
-            Some(_) if outcome == "finished" => ("finished", None),
+            Some(_) if t.outcome == Outcome::Finished => (Outcome::Finished, None),
             // Landed, but the run went before the tracker heard of it.
             Some(sha) => {
                 if !on_tracker {
@@ -92,51 +89,48 @@ fn reconcile(
                         .flat_map(|e| &e.criteria)
                         .map(|c| c.text.clone())
                         .collect();
-                    let (criteria, gates) = store.update(|s| {
-                        let t = &s.tickets[&id];
-                        let met = report::met(&t.criteria, &criteria);
-                        (met, gate_lines(&config.gates, &t.gates))
-                    })?;
-                    let written = writeback::landed(tracker, cx, &id, &criteria, &sha, &gates)?;
+                    let criteria = report::met(&t.criteria, &criteria);
+                    let gates = gate_lines(&config.gates, &t.gates);
+                    let written = writeback::landed(tracker, cx, id, &criteria, sha, &gates)?;
                     store.update(|s| {
-                        let t = s.tickets.get_mut(&id).unwrap();
+                        let t = s.tickets.get_mut(id).unwrap();
                         (t.mismatches, t.writeback) = (written.mismatches, written.problems);
                     })?;
                 }
-                ("finished", Some(format!("merged {}", &sha[..12])))
+                (Outcome::Finished, Some(format!("merged {}", &sha[..12])))
             }
-            None if outcome != "finished" && on_tracker => {
-                ("finished", Some("finished on the tracker".into()))
+            None if t.outcome != Outcome::Finished && on_tracker => {
+                (Outcome::Finished, Some("finished on the tracker".into()))
             }
-            None if outcome == "running" || outcome == "integrating" => {
+            None if matches!(t.outcome, Outcome::Running | Outcome::Integrating) => {
                 // Failed, but not tried: it restarts in a fresh worktree.
                 let reason = "its process is gone".to_string();
                 events.event(&format!("ticket {id} failed: {reason}"));
                 store.update(|s| {
-                    let t = s.tickets.get_mut(&id).unwrap();
-                    (t.outcome, t.reason) = ("failed".into(), Some(reason));
+                    let t = s.tickets.get_mut(id).unwrap();
+                    (t.outcome, t.reason) = (Outcome::Failed, Some(reason));
                 })?;
                 continue;
             }
-            None => (outcome.as_str(), None),
+            None => (t.outcome, None),
         };
-        if kind != outcome {
+        if outcome != t.outcome {
             events.event(&format!(
-                "ticket {id} {kind}: {}",
+                "ticket {id} {outcome}: {}",
                 reason.as_deref().unwrap_or_default()
             ));
             store.update(|s| {
-                let t = s.tickets.get_mut(&id).unwrap();
-                t.outcome = kind.into();
-                if kind == "failed" {
+                let t = s.tickets.get_mut(id).unwrap();
+                t.outcome = outcome;
+                if outcome == Outcome::Failed {
                     t.reason = reason;
-                    run::block_dependents(s, &reading, &id, kind, events);
+                    run::block_dependents(s, &reading, id, outcome, events);
                 }
             })?;
         }
         // Held and skipped tickets start again once their blockers are finished.
-        if !["pending", "held", "skipped"].contains(&kind) {
-            tried.insert(id);
+        if !matches!(outcome, Outcome::Pending | Outcome::Held | Outcome::Skipped) {
+            tried.insert(id.clone());
         }
     }
     Ok(tried)

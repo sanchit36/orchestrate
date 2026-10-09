@@ -1,6 +1,6 @@
 //! Run loop: a dispatcher that re-reads the tracker each time it picks tickets, works
-//! up to the session ceiling at once, and lands each ticket's gated work on the
-//! integration branch, one landing at a time.
+//! up to the session ceiling at once (each ticket on its own thread, see `work`), and
+//! ends the run when nothing runs and nothing can start.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,19 +9,19 @@ use std::thread;
 
 use anyhow::{Result, bail};
 
-use crate::config::{self, Gate, MachineConfig, MaxParallel, RepoConfig};
-use crate::git::{self, git};
-use crate::integrator::{self, Integration, Landing};
-use crate::report::{self, Report};
-use crate::reporting::Events;
+use crate::config::{self, MachineConfig, MaxParallel, RepoConfig};
+use crate::events::Events;
+use crate::git;
+use crate::integrator::Integration;
 use crate::spec::{self, Reading};
-use crate::state::{self, GateResult, RunDirs, State, Store, TicketState};
-use crate::tracker::{self, Msg, Pausing, Remote, Ticket, Tracker};
-use crate::writeback::{self, Written};
-use crate::{control, planner, prompt, session, worktree};
+use crate::state::{self, Outcome, RunDirs, RunStatus, State, Store, TicketState};
+use crate::tracker::{self, Msg, Pausing, Remote, Tracker};
+use crate::work::{Ending, Work};
+use crate::writeback;
+use crate::{control, planner, session, worktree};
 
-/// What a worker sends back when its ticket's work ends.
-type Done = (String, Result<Outcome>);
+/// What a ticket's thread sends back when its work ends.
+type Ended = (String, Result<Ending>);
 
 pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) -> Result<()> {
     let (config, machine) = config::load(top)?;
@@ -29,7 +29,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
     preflight(top, &config, branch)?;
     let max = max.unwrap_or(machine.max_parallel);
     // Refuse a spec that cannot start before anything is created.
-    let start = spec::read(
+    let start = spec::read_to_start(
         tracker::open(&config, top).as_ref(),
         spec_id,
         &config.criteria_headings,
@@ -113,7 +113,7 @@ pub fn drive(
 
     // The tracker reads and writes back in the integration worktree, never the user's checkout.
     // A tracker failure pauses the run until the tracker answers again. Only this
-    // (the dispatcher) thread calls it; workers reach it through a `Remote`.
+    // (the dispatcher) thread calls it; ticket threads reach it through a `Remote`.
     let tracker = Pausing::new(
         tracker::open(config, &integration_wt),
         &config.tracker,
@@ -140,20 +140,22 @@ pub fn drive(
     let mut cycle = false;
     let mut wait = config.tracker.probe_backoff;
     thread::scope(|scope| -> Result<()> {
-        let (tx, rx) = mpsc::channel::<Msg<Done>>();
+        let (tx, rx) = mpsc::channel::<Msg<Ended>>();
         let mut dispatch = || -> Result<()> {
             loop {
-                let reading = spec::reread(&tracker, spec_id, headings)?;
+                let reading = spec::read(&tracker, spec_id, headings)?;
                 store.update(|state| {
                     for t in reading.tickets.iter().map(|e| &e.ticket) {
-                        let seen =
-                            state
-                                .tickets
-                                .entry(t.id.clone())
-                                .or_insert_with(|| TicketState {
-                                    outcome: if t.finished { "finished" } else { "pending" }.into(),
-                                    ..TicketState::default()
-                                });
+                        let seen = state.tickets.entry(t.id.clone()).or_insert_with(|| {
+                            let outcome = match t.finished {
+                                true => Outcome::Finished,
+                                false => Outcome::Pending,
+                            };
+                            TicketState {
+                                outcome,
+                                ..TicketState::default()
+                            }
+                        });
                         seen.title = t.title.clone();
                     }
                 })?;
@@ -186,7 +188,7 @@ pub fn drive(
                             tried.insert(ticket.id.clone());
                             store.update(|s| {
                                 s.tickets.get_mut(&ticket.id).map(|t| {
-                                    t.outcome = "running".into();
+                                    t.outcome = Outcome::Running;
                                     t.started = Some(jiff::Timestamp::now().to_string());
                                 })
                             })?;
@@ -195,7 +197,7 @@ pub fn drive(
                             let tx = tx.clone();
                             scope.spawn(move || {
                                 let remote = Remote(tx.clone());
-                                let run = Run {
+                                let work = Work {
                                     top,
                                     config,
                                     dirs,
@@ -205,10 +207,10 @@ pub fn drive(
                                     store: store_ref,
                                     landing,
                                 };
-                                let outcome = Events::open(&dirs.logs.join("run.log")).and_then(
-                                    |mut events| run.work(&reading, &ticket, &mut events),
+                                let ending = Events::open(&dirs.logs.join("run.log")).and_then(
+                                    |mut events| work.ticket(&reading, &ticket, &mut events),
                                 );
-                                let _ = tx.send(Msg::Done((ticket.id, outcome)));
+                                let _ = tx.send(Msg::Ended((ticket.id, ending)));
                             });
                         }
                     }
@@ -221,22 +223,22 @@ pub fn drive(
                     wait = (wait * 2).min(config.tracker.probe_backoff_max);
                     continue;
                 }
-                // Serve the workers' tracker calls until one ticket's work ends.
-                let (id, outcome) = loop {
+                // Serve the ticket threads' tracker calls until one ticket's work ends.
+                let (id, ending) = loop {
                     match rx.recv()? {
                         Msg::Call(call) => call(&tracker),
-                        Msg::Done(done) => break done,
+                        Msg::Ended(ended) => break ended,
                     }
                 };
                 running -= 1;
-                let outcome = outcome?;
-                let kind = outcome.kind;
+                let ending = ending?;
+                let outcome = ending.outcome;
                 let title = store.update(|s| s.tickets.get(&id).map(|t| t.title.clone()))?;
-                events.notify(&format!("{id} {}: {kind}", title.unwrap_or_default()));
+                events.notify(&format!("{id} {}: {outcome}", title.unwrap_or_default()));
                 store.update(|state| {
-                    set_outcome(state, &id, outcome);
-                    if kind != "finished" {
-                        block_dependents(state, &reading, &id, kind, &mut events);
+                    set_ending(state, &id, ending);
+                    if outcome != Outcome::Finished {
+                        block_dependents(state, &reading, &id, outcome, &mut events);
                     }
                 })?;
             }
@@ -256,15 +258,15 @@ pub fn drive(
     }
 
     let (counts, problems) = store.update(|state| {
-        state.status = "ended".into();
-        let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
+        state.status = RunStatus::Ended;
+        let count = |o: Outcome| state.tickets.values().filter(|t| t.outcome == o).count();
         let counts = (
             // Landed by this run, not finished before it.
             (state.tickets.values())
-                .filter(|t| t.merged.is_some())
+                .filter(|t| t.outcome == Outcome::Finished && t.merged.is_some())
                 .count(),
-            count("failed") + count("timeout"),
-            count("stuck"),
+            count(Outcome::Failed) + count(Outcome::Timeout),
+            count(Outcome::Stuck),
         );
         let problems: Vec<String> = (state.tickets.iter())
             .flat_map(|(id, t)| t.writeback.iter().map(move |p| format!("ticket {id}: {p}")))
@@ -284,255 +286,46 @@ pub fn drive(
     Ok(())
 }
 
-/// How a ticket's work ended: `finished`, `failed`, `timeout` (a kind of failed) or
-/// `stuck`, with the cause.
-struct Outcome {
-    kind: &'static str,
-    reason: Option<String>,
-    unmet: Vec<String>,
-    written: Written,
-}
-
-impl Outcome {
-    fn new(kind: &'static str) -> Self {
-        Self {
-            kind,
-            reason: None,
-            unmet: Vec::new(),
-            written: Written::default(),
-        }
-    }
-
-    fn because(kind: &'static str, reason: String) -> Self {
-        Self {
-            reason: Some(reason),
-            ..Self::new(kind)
-        }
-    }
-}
-
-fn set_outcome(state: &mut State, id: &str, outcome: Outcome) {
+fn set_ending(state: &mut State, id: &str, ending: Ending) {
     if let Some(t) = state.tickets.get_mut(id) {
-        t.outcome = outcome.kind.into();
-        t.reason = outcome.reason;
-        t.unmet = outcome.unmet;
-        t.mismatches = outcome.written.mismatches;
-        t.writeback = outcome.written.problems;
+        t.outcome = ending.outcome;
+        t.reason = ending.reason;
+        t.unmet = ending.unmet;
+        t.mismatches = ending.written.mismatches;
+        t.writeback = ending.written.problems;
     }
 }
 
-/// Every pending ticket blocked, directly or not, by `id` becomes `held` behind a stuck
-/// ticket or `skipped` behind a failed one.
+/// Every pending ticket blocked, directly or not, by `id` becomes held behind a stuck
+/// ticket or skipped behind a failed one (`outcome` is how `id` ended).
 pub fn block_dependents(
     state: &mut State,
     reading: &Reading,
     id: &str,
-    kind: &str,
+    outcome: Outcome,
     events: &mut Events,
 ) {
-    let (outcome, cause) = match kind {
-        "stuck" => ("held", "stuck"),
-        _ => ("skipped", "failed"),
+    let (blocked_outcome, cause) = match outcome {
+        Outcome::Stuck => (Outcome::Held, "stuck"),
+        _ => (Outcome::Skipped, "failed"),
     };
     let reason = format!("blocked by {cause} {id}");
     let mut blocked = HashSet::from([id.to_string()]);
     loop {
         let next = reading.tickets.iter().find(|e| {
-            let pending = state
-                .tickets
-                .get(&e.ticket.id)
-                .is_some_and(|t| t.outcome == "pending");
+            let pending =
+                (state.tickets.get(&e.ticket.id)).is_some_and(|t| t.outcome == Outcome::Pending);
             pending && e.blockers.iter().any(|b| blocked.contains(&b.id))
         });
         let Some(e) = next else { break };
         let t = &e.ticket;
-        set_outcome(state, &t.id, Outcome::because(outcome, reason.clone()));
-        events.event(&format!("ticket {} {outcome}: {reason}", t.id));
+        set_ending(
+            state,
+            &t.id,
+            Ending::because(blocked_outcome, reason.clone()),
+        );
+        events.event(&format!("ticket {} {blocked_outcome}: {reason}", t.id));
         blocked.insert(t.id.clone());
-    }
-}
-
-struct Run<'a> {
-    top: &'a Path,
-    config: &'a RepoConfig,
-    dirs: &'a RunDirs,
-    into: &'a Integration<'a>,
-    tracker: &'a dyn Tracker,
-    cx: &'a writeback::Context<'a>,
-    store: &'a Store,
-    /// The integration lock: one landing (through write-back and teardown) at a time.
-    landing: &'a Mutex<()>,
-}
-
-impl Run<'_> {
-    /// Change ticket `id`'s recorded state.
-    fn ticket(&self, id: &str, f: impl FnOnce(&mut TicketState)) -> Result<()> {
-        self.store.update(|s| s.tickets.get_mut(id).map(f))?;
-        Ok(())
-    }
-
-    /// `slug`, else `slug-2`, `slug-3`, ...: the first name whose worktree and branch are
-    /// both free, so a restarted ticket keeps its old ones.
-    fn fresh(&self, slug: String) -> Result<String> {
-        let mut name = slug.clone();
-        for n in 2.. {
-            let branch = format!("refs/heads/orchestrate/{}/{name}", self.dirs.id);
-            let taken = git::succeeds(self.top, &["rev-parse", "--verify", "--quiet", &branch])?;
-            if !taken && !self.dirs.worktrees.join(&name).exists() {
-                break;
-            }
-            name = format!("{slug}-{n}");
-        }
-        Ok(name)
-    }
-
-    /// Work one ticket and write its outcome back to the tracker.
-    fn work(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
-        let mut outcome = self.attempt(reading, ticket, events)?;
-        if outcome.kind != "finished" {
-            // The tracker may commit in the integration worktree, so wait out any landing.
-            let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
-            let reason = outcome.reason.as_deref();
-            outcome.written =
-                writeback::outcome(self.tracker, self.cx, &ticket.id, outcome.kind, reason);
-        }
-        Ok(outcome)
-    }
-
-    /// Work one ticket from worktree to landing; returns its outcome.
-    fn attempt(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
-        let slug = self.fresh(state::slug(&ticket.id))?;
-        let wt = self.dirs.worktrees.join(&slug);
-        let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
-        worktree::create(self.top, &wt, &branch, self.into.branch)?;
-        self.ticket(&ticket.id, |t| t.worktree = Some(wt.clone()))?;
-        events.event(&format!("ticket {} started: {}", ticket.id, ticket.title));
-        let prepare_log = self.dirs.logs.join(format!("{slug}.prepare.log"));
-        if let Some(reason) = worktree::prepare(self.top, &wt, self.config, &prepare_log)? {
-            events.event(&format!("ticket {} failed: {reason}", ticket.id));
-            return Ok(Outcome::because("failed", reason));
-        }
-        // Seeded and prepared files are not the session's work, so landing allows them.
-        let baseline = git::changes(&wt)?;
-
-        let session = &self.config.session;
-        let prompt = prompt::render(session, self.top, &reading.spec.body, &ticket.body, &branch)?;
-        let log = self.dirs.logs.join(format!("{slug}.session.log"));
-        let mode = &session.permission_mode;
-        let Some(code) = session::run(&wt, &prompt, mode, session.timeout, &log)? else {
-            let reason = format!("no exit after {:?}", session.timeout);
-            events.event(&format!("ticket {} timeout: {reason}", ticket.id));
-            return Ok(Outcome::because("timeout", reason));
-        };
-
-        let new_commits = git(
-            &wt,
-            &[
-                "rev-list",
-                "--count",
-                &format!("{}..HEAD", self.into.branch),
-            ],
-        )?;
-        // The criteria read at dispatch: a report must cover every one of them.
-        let criteria: Vec<String> = (reading.tickets.iter())
-            .filter(|e| e.ticket.id == ticket.id)
-            .flat_map(|e| &e.criteria)
-            .map(|c| c.text.clone())
-            .collect();
-        let report = Report::read(&wt).map(|mut r| {
-            r.cover(&criteria);
-            r
-        });
-        let mut reported = Vec::new();
-        if let Ok(r) = &report {
-            reported = r.acceptance_criteria.clone();
-            self.ticket(&ticket.id, |t| {
-                t.criteria = r.acceptance_criteria.clone();
-                t.notes = r.notes.clone();
-            })?;
-        }
-        let failure = match report {
-            _ if code != 0 => Some(format!("session exited {code}")),
-            Err(e) => Some(format!("{e:#}")),
-            Ok(report) if !report.is_done() => return Ok(stuck(ticket, report, events)),
-            Ok(_) if new_commits == "0" => Some("no new commits".into()),
-            Ok(_) => None,
-        };
-        let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
-        let mut gates = Vec::new();
-        let landing = match failure {
-            Some(reason) => Landing::Failed(reason),
-            None => {
-                self.ticket(&ticket.id, |t| t.outcome = "integrating".into())?;
-                let message = format!("Merge ticket {}: {}", ticket.id, ticket.title);
-                let mut results = Vec::new();
-                let landing = integrator::land(
-                    self.into,
-                    &wt,
-                    &branch,
-                    &baseline,
-                    &self.config.gates,
-                    &self.config.session,
-                    &self.dirs.logs,
-                    &slug,
-                    &message,
-                    &mut results,
-                )?;
-                gates = gate_lines(&self.config.gates, &results);
-                self.ticket(&ticket.id, |t| t.gates = results)?;
-                landing
-            }
-        };
-        match landing {
-            Landing::Merged(sha) => {
-                self.ticket(&ticket.id, |t| t.merged = Some(sha.clone()))?;
-                let criteria = report::met(&reported, &criteria);
-                let written =
-                    writeback::landed(self.tracker, self.cx, &ticket.id, &criteria, &sha, &gates)?;
-                worktree::remove(self.top, &wt, &branch)?;
-                events.event(&format!(
-                    "ticket {} finished: merged {}",
-                    ticket.id,
-                    &sha[..12]
-                ));
-                Ok(Outcome {
-                    written,
-                    ..Outcome::new("finished")
-                })
-            }
-            Landing::Failed(reason) => {
-                events.event(&format!("ticket {} failed: {reason}", ticket.id));
-                Ok(Outcome::because("failed", reason))
-            }
-        }
-    }
-}
-
-/// Each gate as its landing ran it, for the landing comment; no result means skipped.
-pub fn gate_lines(gates: &[Gate], results: &[GateResult]) -> Vec<String> {
-    gates
-        .iter()
-        .map(|g| match results.iter().find(|r| r.name == g.name) {
-            Some(r) if r.code == 0 && !r.timed_out => format!("{}: passed", g.name),
-            Some(r) => format!("{}: {}", g.name, r.ended()),
-            None => format!("{}: skipped", g.name),
-        })
-        .collect()
-}
-
-/// A stuck session: its notes are the reason; unmet criteria are kept beside them.
-fn stuck(ticket: &Ticket, report: Report, events: &mut Events) -> Outcome {
-    let unmet = report.unmet();
-    let notes = report.notes.trim();
-    let mut cause: Vec<String> = notes.lines().next().map(String::from).into_iter().collect();
-    if !unmet.is_empty() {
-        cause.push(format!("unmet: {}", unmet.join(", ")));
-    }
-    events.event(&format!("ticket {} stuck: {}", ticket.id, cause.join("; ")));
-    Outcome {
-        reason: (!notes.is_empty()).then(|| notes.to_string()),
-        unmet,
-        ..Outcome::new("stuck")
     }
 }
 

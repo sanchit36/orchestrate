@@ -48,7 +48,7 @@ struct BlockerOut {
 }
 
 /// What `mark_finished` and `comment` print: any JSON object, such as `{}`.
-type Done = serde_json::Map<String, serde_json::Value>;
+type Answer = serde_json::Map<String, serde_json::Value>;
 
 #[derive(Deserialize)]
 struct TickOut {
@@ -93,14 +93,14 @@ impl Tracker for Commands {
     }
 
     fn mark_finished(&self, ticket: &str) -> Result<()> {
-        let _: Done = self.call("mark_finished", &self.templates.mark_finished, ticket, "")?;
+        let _: Answer = self.call("mark_finished", &self.templates.mark_finished, ticket, "")?;
         Ok(())
     }
 
     /// The Markdown goes to the template on stdin.
     fn comment(&self, ticket: &str, markdown: &str) -> Result<()> {
         let template = self.templates.comment.as_ref().ok_or(Unsupported)?;
-        let _: Done = self.call("comment", template, ticket, markdown)?;
+        let _: Answer = self.call("comment", template, ticket, markdown)?;
         Ok(())
     }
 

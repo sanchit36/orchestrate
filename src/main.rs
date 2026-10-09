@@ -1,6 +1,7 @@
 mod clean;
 mod config;
 mod control;
+mod events;
 mod gate;
 mod git;
 mod integrator;
@@ -10,7 +11,6 @@ mod planner;
 mod process;
 mod prompt;
 mod report;
-mod reporting;
 mod resume;
 mod run;
 mod session;
@@ -19,6 +19,7 @@ mod spec;
 mod state;
 mod status;
 mod tracker;
+mod work;
 mod worktree;
 mod writeback;
 
@@ -175,7 +176,7 @@ fn plan(spec_id: &str) -> Result<()> {
         eprintln!("orchestrate: warning: {warning}");
     }
     let tracker = tracker::open(&config, &top);
-    let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)?;
+    let reading = spec::read_to_start(tracker.as_ref(), spec_id, &config.criteria_headings)?;
     planner::print(&reading, planner::plan(&reading)?);
     Ok(())
 }

@@ -1,17 +1,13 @@
 //! Thin wrapper over the `git` CLI.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
 /// Run `git <args>` in `dir`; the trimmed stdout on success, stderr in the error otherwise.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .context("running git")?;
+    let out = output(dir, args)?;
     if !out.status.success() {
         bail!(
             "git {} failed in {}: {}",
@@ -62,10 +58,13 @@ pub fn changes(dir: &Path) -> Result<Vec<String>> {
 
 /// Whether `git <args>` exits 0 in `dir`.
 pub fn succeeds(dir: &Path, args: &[&str]) -> Result<bool> {
-    let out = Command::new("git")
+    Ok(output(dir, args)?.status.success())
+}
+
+fn output(dir: &Path, args: &[&str]) -> Result<Output> {
+    Command::new("git")
         .args(args)
         .current_dir(dir)
         .output()
-        .context("running git")?;
-    Ok(out.status.success())
+        .context("running git")
 }

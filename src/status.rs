@@ -7,18 +7,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::config;
-use crate::state::{self, State, TicketState};
+use crate::state::{self, Outcome, RunStatus, State, TicketState};
 
-/// Outcomes in the order `status` counts them.
-const OUTCOMES: &[&str] = &[
-    "pending",
-    "running",
-    "integrating",
-    "finished",
-    "failed",
-    "stuck",
-    "held",
-    "skipped",
+/// Outcomes in the order `status` counts them; a timeout counts as failed.
+const OUTCOMES: &[Outcome] = &[
+    Outcome::Pending,
+    Outcome::Running,
+    Outcome::Integrating,
+    Outcome::Finished,
+    Outcome::Failed,
+    Outcome::Stuck,
+    Outcome::Held,
+    Outcome::Skipped,
 ];
 
 /// `status [<ticket>] [--run ID]`.
@@ -137,15 +137,15 @@ fn detail(id: &str, t: &TicketState, logs: &Path) -> Result<String> {
 /// `running`, `paused (<reason>)`, `stopped` or `ended`.
 fn run_state(s: &State) -> String {
     match &s.paused {
-        Some(reason) if s.status == "running" => format!("paused ({reason})"),
-        _ => s.status.clone(),
+        Some(reason) if s.status == RunStatus::Running => format!("paused ({reason})"),
+        _ => s.status.to_string(),
     }
 }
 
 /// The outcome as counted: a timeout is a kind of failure.
-fn shown(t: &TicketState) -> &str {
-    match t.outcome.as_str() {
-        "timeout" => "failed",
+fn shown(t: &TicketState) -> Outcome {
+    match t.outcome {
+        Outcome::Timeout => Outcome::Failed,
         o => o,
     }
 }
@@ -153,12 +153,12 @@ fn shown(t: &TicketState) -> &str {
 /// The outcome with its cause or elapsed time.
 fn outcome(t: &TicketState) -> String {
     let reason = t.reason.as_deref().unwrap_or_default();
-    match t.outcome.as_str() {
-        "running" => format!("running ({})", elapsed(t)),
-        "timeout" => "failed (timeout)".into(),
-        "failed" => format!("failed ({})", cause(reason)),
-        o @ ("held" | "skipped") if !reason.is_empty() => format!("{o} ({reason})"),
-        o => o.into(),
+    match t.outcome {
+        Outcome::Running => format!("running ({})", elapsed(t)),
+        Outcome::Timeout => "failed (timeout)".into(),
+        Outcome::Failed => format!("failed ({})", cause(reason)),
+        o @ (Outcome::Held | Outcome::Skipped) if !reason.is_empty() => format!("{o} ({reason})"),
+        o => o.to_string(),
     }
 }
 

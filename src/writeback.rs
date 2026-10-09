@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::state::Outcome;
 use crate::tracker::{Tracker, Unsupported};
 
 /// The run a write-back belongs to, and the local paths to keep out of what is posted.
@@ -67,10 +68,10 @@ pub fn outcome(
     tracker: &dyn Tracker,
     cx: &Context,
     ticket: &str,
-    kind: &str,
+    outcome: Outcome,
     reason: Option<&str>,
 ) -> Written {
-    let mut text = format!("Orchestrate run `{}`: {kind}", cx.run_id);
+    let mut text = format!("Orchestrate run `{}`: {outcome}", cx.run_id);
     match reason {
         Some(r) if r.contains('\n') => text.push_str(&format!(".\n\n{r}\n")),
         Some(r) => text.push_str(&format!(": {r}\n")),
@@ -167,7 +168,7 @@ mod tests {
                 "comment skipped: not supported by this tracker"
             ]
         );
-        let w = outcome(&t, &cx(), "a", "failed", Some("gate check exited 1"));
+        let w = outcome(&t, &cx(), "a", Outcome::Failed, Some("gate check exited 1"));
         assert_eq!(
             w.problems,
             ["comment skipped: not supported by this tracker"]

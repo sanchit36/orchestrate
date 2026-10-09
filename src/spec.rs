@@ -25,7 +25,7 @@ pub struct Entry {
 }
 
 /// A reading for a run already under way, where every ticket having landed is normal.
-pub fn reread(tracker: &dyn Tracker, spec: &str, criteria_headings: &[String]) -> Result<Reading> {
+pub fn read(tracker: &dyn Tracker, spec: &str, criteria_headings: &[String]) -> Result<Reading> {
     let spec = tracker.get_spec(spec)?;
     let mut warnings = Vec::new();
     let tickets = tracker
@@ -68,9 +68,13 @@ pub fn reread(tracker: &dyn Tracker, spec: &str, criteria_headings: &[String]) -
     })
 }
 
-/// [`reread`], and refuses a spec with no open ready ticket: the checks before a start.
-pub fn read(tracker: &dyn Tracker, spec: &str, criteria_headings: &[String]) -> Result<Reading> {
-    let reading = reread(tracker, spec, criteria_headings)?;
+/// [`read`], and refuses a spec with no open ready ticket: the checks before a start.
+pub fn read_to_start(
+    tracker: &dyn Tracker,
+    spec: &str,
+    criteria_headings: &[String],
+) -> Result<Reading> {
+    let reading = read(tracker, spec, criteria_headings)?;
     let tickets = &reading.tickets;
     if !tickets.iter().any(|e| e.ticket.ready && !e.ticket.finished) {
         bail!("spec `{}` has no ready tickets", reading.spec.id);

@@ -1,6 +1,6 @@
-//! A tracker for worker threads: each call is sent to the dispatcher thread, which runs
+//! A tracker for ticket threads: each call is sent to the dispatcher thread, which runs
 //! it on the run's (pausing) tracker and sends the answer back. So a paused tracker
-//! blocks only the dispatcher and the worker waiting on it; other sessions carry on.
+//! blocks only the dispatcher and the ticket thread waiting on it; other sessions carry on.
 
 use std::sync::mpsc::{self, Sender};
 
@@ -11,10 +11,10 @@ use super::{Blocker, Spec, Ticket, Tracker};
 /// A tracker call for the dispatcher thread to run.
 pub type Call = Box<dyn FnOnce(&dyn Tracker) + Send>;
 
-/// What a worker thread sends the dispatcher: a tracker call, or the end of its work.
+/// What a ticket thread sends the dispatcher: a tracker call, or the end of its work.
 pub enum Msg<T> {
     Call(Call),
-    Done(T),
+    Ended(T),
 }
 
 pub struct Remote<T>(pub Sender<Msg<T>>);
