@@ -31,7 +31,9 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
 
     session::kill_sessions_on_interrupt()?;
     let dirs = RunDirs::create(&machine, top, spec_id)?;
-    let mut events = Events::open(&dirs.logs.join("run.log"))?;
+    let notify = machine.notifications != Some(false);
+    let spec_slug = state::slug(spec_id);
+    let mut events = Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug);
     let store = Store::create(&dirs, State::new(&dirs.id, spec_id, branch))?;
     let integration_wt = dirs.worktrees.join("_integration");
     worktree::integration(top, &integration_wt, branch)?;
@@ -45,7 +47,7 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let tracker = Pausing::new(
         tracker::open(&config, &integration_wt),
         &config.tracker,
-        Events::open(&dirs.logs.join("run.log"))?,
+        Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug),
         Box::new(|paused| store.update(|s| s.paused = paused)),
     );
     let into = Integration {
@@ -86,8 +88,9 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
             t.started = Some(jiff::Timestamp::now().to_string());
         })?;
         let outcome = run.work(&reading, ticket, &mut events)?;
+        let kind = outcome.kind;
+        events.notify(&format!("{} {}: {kind}", ticket.id, ticket.title));
         store.update(|state| {
-            let kind = outcome.kind;
             set_outcome(state, &ticket.id, outcome);
             if kind != "finished" {
                 block_dependents(state, &reading, &ticket.id, kind, &mut events);
@@ -104,10 +107,12 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
             count("stuck"),
         )
     })?;
-    events.event(&format!(
+    let ended = format!(
         "run {} ended: {} finished, {} failed, {} stuck; integration branch {branch}",
         dirs.id, counts.0, counts.1, counts.2,
-    ));
+    );
+    events.event(&ended);
+    events.notify(&ended);
     events.event(&format!("push it with: git push -u origin {branch}"));
     Ok(())
 }

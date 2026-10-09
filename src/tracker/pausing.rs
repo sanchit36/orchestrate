@@ -58,16 +58,17 @@ impl<'a> Pausing<'a> {
         let mut wait = self.config.probe_backoff;
         let reason = format!("{op} failed: {}", one_line(&err));
         (self.on_pause)(Some(reason.clone()))?;
-        events.event(&format!(
-            "run paused: {reason}; next probe in {}",
-            human(wait)
-        ));
+        let paused = format!("run paused: {reason}");
+        events.event(&format!("{paused}; next probe in {}", human(wait)));
+        events.notify(&paused);
         loop {
             sleep(wait);
             match f(tracker) {
                 Ok(v) => {
                     (self.on_pause)(None)?;
-                    events.event(&format!("run recovered: {op} succeeded"));
+                    let recovered = format!("run recovered: {op} succeeded");
+                    events.event(&recovered);
+                    events.notify(&recovered);
                     return Ok(v);
                 }
                 Err(err) => {
