@@ -54,6 +54,10 @@ _Avoid_: result file, result contract
 The outcome of a session that needs a human before its work can land: it reports it cannot go on, or reports any acceptance criterion unmet; distinct from a ticket being blocked by another ticket.
 _Avoid_: blocked
 
+**Paused**:
+The state of a run that starts no new sessions because the tracker could not be read or written; running sessions carry on, and the run unpauses by itself once the tracker answers.
+_Avoid_: held, suspended
+
 **Integration branch**:
 The single branch where a run lands every ticket's gated work, for a human to review.
 _Avoid_: staging branch, feature branch
