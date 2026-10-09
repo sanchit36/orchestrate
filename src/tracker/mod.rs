@@ -1,6 +1,7 @@
 //! Tracker adapter: the one contract every tracker meets (ADR 0001).
 //! Ids are opaque strings; any translation stays inside the adapter.
 
+mod commands;
 #[cfg(test)]
 pub(crate) mod contract;
 mod local_markdown;
@@ -76,5 +77,18 @@ pub fn open(config: &RepoConfig, top: &Path) -> Box<dyn Tracker> {
             ready: config.tracker.ready.clone(),
             criteria_headings: config.criteria_headings.clone(),
         }),
+        TrackerKind::Commands => Box::new(commands::Commands {
+            templates: config.tracker.commands.clone().expect("checked at load"),
+            dir: top.to_path_buf(),
+        }),
+    }
+}
+
+/// What `plan` and `run` check before reading the tracker: command templates must be
+/// free of literal secrets and approved. Returns warnings that do not block.
+pub fn check(config: &RepoConfig, top: &Path) -> Result<Vec<String>> {
+    match &config.tracker.commands {
+        Some(templates) => commands::check(templates, top),
+        None => Ok(Vec::new()),
     }
 }

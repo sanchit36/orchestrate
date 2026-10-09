@@ -20,6 +20,9 @@ use crate::{control, planner, prompt, session, worktree};
 
 pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     let (config, machine) = config::load(top)?;
+    for warning in tracker::check(&config, top)? {
+        eprintln!("orchestrate: warning: {warning}");
+    }
     if config.gates.is_empty() {
         bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
     }
