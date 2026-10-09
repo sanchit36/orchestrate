@@ -12,6 +12,7 @@ mod reporting;
 mod resume;
 mod run;
 mod session;
+mod setup;
 mod spec;
 mod state;
 mod status;
@@ -36,6 +37,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Detect, propose and confirm the repo's tracker, gates and settings, verify the
+    /// tracker on one spec, then write the config. Answers are read from stdin.
+    Setup,
     /// Show the frontier of a spec without starting anything.
     Plan {
         /// The spec id on the tracker.
@@ -86,6 +90,9 @@ enum Cmd {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Cmd::Setup => {
+            git_toplevel().and_then(|top| setup::setup(&top, &mut std::io::stdin().lock()))
+        }
         Cmd::Plan { spec } => plan(&spec),
         Cmd::Run {
             spec,
@@ -134,28 +141,7 @@ fn plan(spec_id: &str) -> Result<()> {
     }
     let tracker = tracker::open(&config, &top);
     let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)?;
-    let plan = planner::plan(&reading)?;
-    println!(
-        "Spec {}: {}\n\nFrontier:",
-        reading.spec.id, reading.spec.title
-    );
-    for t in plan.frontier {
-        println!("  {}  {}", t.id, t.title);
-    }
-    for (heading, list) in [("Waiting", plan.waiting), ("Needs attention", plan.held)] {
-        if !list.is_empty() {
-            println!("\n{heading}:");
-        }
-        for (t, why) in list {
-            println!("  {}  {}  ({why})", t.id, t.title);
-        }
-    }
-    if !reading.warnings.is_empty() {
-        println!("\nWarnings:");
-        for w in &reading.warnings {
-            println!("  {w}");
-        }
-    }
+    planner::print(&reading, planner::plan(&reading)?);
     Ok(())
 }
 

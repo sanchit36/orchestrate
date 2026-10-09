@@ -17,6 +17,31 @@ pub struct Plan<'a> {
     pub waiting: Vec<(&'a Ticket, String)>,
 }
 
+/// Print a plan the way `plan` shows it: frontier, then waiting, held and warnings.
+pub fn print(reading: &Reading, plan: Plan) {
+    println!(
+        "Spec {}: {}\n\nFrontier:",
+        reading.spec.id, reading.spec.title
+    );
+    for t in plan.frontier {
+        println!("  {}  {}", t.id, t.title);
+    }
+    for (heading, list) in [("Waiting", plan.waiting), ("Needs attention", plan.held)] {
+        if !list.is_empty() {
+            println!("\n{heading}:");
+        }
+        for (t, why) in list {
+            println!("  {}  {}  ({why})", t.id, t.title);
+        }
+    }
+    if !reading.warnings.is_empty() {
+        println!("\nWarnings:");
+        for w in &reading.warnings {
+            println!("  {w}");
+        }
+    }
+}
+
 /// Refuses a blocking cycle among open tickets, naming its tickets.
 pub fn plan(reading: &Reading) -> Result<Plan<'_>> {
     if let Some(cycle) = find_cycle(reading) {

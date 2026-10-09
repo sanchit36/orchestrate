@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer};
 
-const REPO_CONFIG: &str = ".orchestrate/config.toml";
+pub const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
 
 /// Top-level keys of each file, besides `version`.
@@ -236,7 +236,7 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
             repo_path.display()
         );
     };
-    validate(&repo_path, &repo, REPO_KEYS, MACHINE_KEYS, &machine_path)?;
+    let repo = repo_config(&repo_path, repo)?;
     let machine = match read(&machine_path)? {
         Some(machine) => {
             validate(&machine_path, &machine, MACHINE_KEYS, REPO_KEYS, &repo_path)?;
@@ -246,6 +246,18 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
         }
         None => MachineConfig::default(),
     };
+    Ok((repo, machine))
+}
+
+/// Validate a repo config table read from (or about to be written to) `repo_path`.
+pub fn repo_config(repo_path: &Path, repo: toml::Table) -> Result<RepoConfig> {
+    validate(
+        repo_path,
+        &repo,
+        REPO_KEYS,
+        MACHINE_KEYS,
+        &machine_config_path()?,
+    )?;
     let repo: RepoConfig = repo
         .try_into()
         .with_context(|| format!("{}", repo_path.display()))?;
@@ -263,7 +275,7 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
         check_github_repo(&repo.tracker.location)
             .with_context(|| format!("{}", repo_path.display()))?;
     }
-    Ok((repo, machine))
+    Ok(repo)
 }
 
 fn check_gate(gate: &Gate) -> Result<()> {
@@ -288,7 +300,7 @@ fn check_github_repo(location: &str) -> Result<()> {
     }
 }
 
-fn machine_config_path() -> Result<PathBuf> {
+pub fn machine_config_path() -> Result<PathBuf> {
     Ok(machine_dir()?.join("config.toml"))
 }
 
@@ -299,7 +311,7 @@ pub fn machine_dir() -> Result<PathBuf> {
 }
 
 /// The parsed file, or `None` when it does not exist.
-fn read(path: &Path) -> Result<Option<toml::Table>> {
+pub fn read(path: &Path) -> Result<Option<toml::Table>> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
