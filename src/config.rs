@@ -193,6 +193,9 @@ pub struct Commands {
 pub enum TrackerKind {
     LocalMarkdown,
     Commands,
+    /// `location` is the `owner/repo` the spec issues live in.
+    #[serde(rename = "github")]
+    GitHub,
 }
 
 fn default_ready() -> String {
@@ -256,6 +259,10 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
     for gate in &repo.gates {
         check_gate(gate).with_context(|| format!("{}", repo_path.display()))?;
     }
+    if let TrackerKind::GitHub = repo.tracker.kind {
+        check_github_repo(&repo.tracker.location)
+            .with_context(|| format!("{}", repo_path.display()))?;
+    }
     Ok((repo, machine))
 }
 
@@ -267,6 +274,18 @@ fn check_gate(gate: &Gate) -> Result<()> {
         crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
     }
     Ok(())
+}
+
+/// A GitHub `location` goes into API paths, so it must be a plain `owner/repo`.
+fn check_github_repo(location: &str) -> Result<()> {
+    let part = |p: &str| {
+        let allowed = |c: char| c.is_ascii_alphanumeric() || "-_.".contains(c);
+        !p.is_empty() && p != "." && p != ".." && p.chars().all(allowed)
+    };
+    match location.split_once('/') {
+        Some((owner, repo)) if part(owner) && part(repo) => Ok(()),
+        _ => bail!("tracker location `{location}` must be `owner/repo` for kind \"github\""),
+    }
 }
 
 fn machine_config_path() -> Result<PathBuf> {

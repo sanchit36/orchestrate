@@ -99,8 +99,11 @@ fn checkbox(line: &str) -> Option<(bool, String)> {
 pub fn tick<S: AsRef<str>>(body: &str, headings: &[S], texts: &[String]) -> (String, Vec<String>) {
     let mut found = Vec::new();
     let (mut level, mut passed) = (None, false);
-    let mut out: Vec<String> = Vec::new();
-    for line in body.lines() {
+    let mut out = String::new();
+    // Line ends (`\n` or GitHub's `\r\n`) are kept, so only ticked lines change.
+    for raw in body.split_inclusive('\n') {
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         if let Some((lv, name)) = heading(line) {
             if level.is_some_and(|l| lv <= l) {
                 (level, passed) = (None, true);
@@ -114,23 +117,19 @@ pub fn tick<S: AsRef<str>>(body: &str, headings: &[S], texts: &[String]) -> (Str
         match checkbox(line).filter(|(_, t)| level.is_some() && texts.contains(t)) {
             Some((met, text)) => {
                 found.push(text);
-                out.push(if met {
-                    line.into()
+                if met {
+                    out.push_str(raw);
                 } else {
-                    line.replacen("- [ ]", "- [x]", 1)
-                });
+                    out.push_str(&raw.replacen("- [ ]", "- [x]", 1));
+                }
             }
-            None => out.push(line.into()),
+            None => out.push_str(raw),
         }
-    }
-    let mut text = out.join("\n");
-    if body.ends_with('\n') {
-        text.push('\n');
     }
     let missing = texts
         .iter()
         .filter(|t| !found.contains(t))
         .cloned()
         .collect();
-    (text, missing)
+    (out, missing)
 }
