@@ -29,6 +29,11 @@ impl Scratch {
             home,
             bin,
         };
+        // An identity for commits made by orchestrate and by fake sessions.
+        write(
+            &s.home.join(".gitconfig"),
+            "[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n",
+        );
         s.git(&["init", "-q", "-b", "main"]);
         s.git(&["commit", "-q", "--allow-empty", "-m", "init"]);
         s
@@ -85,6 +90,67 @@ impl Scratch {
         }
         body.push_str("\n## Acceptance criteria\n\n- [ ] it works\n");
         self.write(&format!("specs/{spec}/{id}.md"), &body);
+    }
+
+    /// Repo config for a local markdown tracker plus one `[[gates]]` entry running `gate`.
+    pub fn local_markdown_tracker_with_gate(&self, gate: &str) {
+        self.repo_config(&format!(
+            "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n\n\
+             [[gates]]\nname = \"check\"\nrun = \"{gate}\"\n"
+        ));
+    }
+
+    /// Commit everything in the repo, so the tracker files are on `HEAD`.
+    pub fn commit_all(&self) {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", "fixtures"]);
+    }
+
+    /// A fake `claude` that lands every ticket. It saves its prompt to
+    /// `bin/prompt.<worktree-name>`, prints `session output`, commits
+    /// `<worktree-name>.txt` and writes a `done` report with every criterion met.
+    pub fn claude_lands(&self) {
+        let script = format!(
+            r#"slug=$(basename "$PWD")
+cat > '{bin}/prompt.'"$slug"
+echo "session output"
+echo "$slug" > "$slug.txt"
+git add "$slug.txt" && git commit -q -m "work $slug"
+printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,"evidence":"ok"}}],"notes":""}}' > .orchestrate-result.json"#,
+            bin = self.bin.display()
+        );
+        self.fake("claude", &script);
+    }
+
+    /// The prompt the fake `claude` received in worktree `name`.
+    pub fn prompt(&self, name: &str) -> String {
+        fs::read_to_string(self.bin.join(format!("prompt.{name}"))).unwrap()
+    }
+
+    /// The default state root, `~/.local/state/orchestrate`.
+    pub fn state_root(&self) -> PathBuf {
+        self.home.join(".local/state/orchestrate")
+    }
+
+    /// The one per-repo directory under the state `root`.
+    pub fn repo_state(&self, root: &Path) -> PathBuf {
+        let dirs: Vec<_> = fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(dirs.len(), 1, "{dirs:?}");
+        dirs.into_iter().next().unwrap()
+    }
+
+    /// The id of the one run under the default state root.
+    pub fn run_id(&self) -> String {
+        let runs = self.repo_state(&self.state_root()).join("runs");
+        let ids: Vec<_> = fs::read_dir(runs)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(ids.len(), 1, "{ids:?}");
+        ids[0].to_string_lossy().into_owned()
     }
 
     /// A fake executable first on `PATH`; each call's args are appended to `bin/<name>.calls`.
