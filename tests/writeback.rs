@@ -158,14 +158,18 @@ fn a_failed_ticket_gets_only_a_comment_without_gate_output() {
 fn a_stuck_ticket_gets_a_comment_with_its_notes_and_no_local_paths() {
     let s = Scratch::new();
     spec(&s, "true");
-    let stuck = r#"printf '{"status":"stuck","acceptance_criteria":[],"notes":"need a db in %s"}' "$PWD" > .orchestrate-result.json"#;
+    let tmp = std::env::temp_dir().join("scratch");
+    let stuck = format!(
+        r#"printf '{{"status":"stuck","acceptance_criteria":[],"notes":"need a db in %s or {}"}}' "$PWD" > .orchestrate-result.json"#,
+        tmp.display()
+    );
     claude(&s, &format!("a) {COMMIT}; {stuck};;"));
 
     s.run(&["run", "auth", "--branch", "int"]).ok();
 
     let file = ticket_file(&s);
     let entry = log(&file);
-    for part in ["stuck", &s.run_id(), "need a db in"] {
+    for part in ["stuck", &s.run_id(), "need a db in", "or <tmp>/scratch"] {
         assert!(entry.contains(part), "no {part} in {entry}");
     }
     let root = s.home.parent().unwrap().to_string_lossy().into_owned();

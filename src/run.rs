@@ -125,7 +125,13 @@ pub fn drive(
         branch,
     };
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let mut private = vec![(top, "<repo>"), (state_dir(&dirs), "<state>")];
+    // Without its trailing `/`, so `<tmp>/x` keeps the separator.
+    let tmp: std::path::PathBuf = std::env::temp_dir().components().collect();
+    let mut private = vec![
+        (top, "<repo>"),
+        (state_dir(&dirs), "<state>"),
+        (&tmp, "<tmp>"),
+    ];
     private.extend(home.as_deref().map(|h| (h, "~")));
     let cx = writeback::Context {
         run_id: &dirs.id,
