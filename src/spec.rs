@@ -19,7 +19,6 @@ pub struct Reading {
 pub struct Entry {
     pub ticket: Ticket,
     pub blockers: Vec<Blocker>,
-    #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
     pub criteria: Vec<Criterion>,
     /// Why this ticket is held back (with every ticket blocked by it), if it is.
     pub hold: Option<String>,

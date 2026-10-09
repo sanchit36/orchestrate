@@ -54,4 +54,14 @@ impl<T: Send> Tracker for Remote<T> {
         let ticket = ticket.to_string();
         self.call(move |t| t.mark_finished(&ticket))
     }
+
+    fn comment(&self, ticket: &str, markdown: &str) -> Result<()> {
+        let (ticket, markdown) = (ticket.to_string(), markdown.to_string());
+        self.call(move |t| t.comment(&ticket, &markdown))
+    }
+
+    fn tick(&self, ticket: &str, criteria: &[String]) -> Result<Vec<String>> {
+        let (ticket, criteria) = (ticket.to_string(), criteria.to_vec());
+        self.call(move |t| t.tick(&ticket, &criteria))
+    }
 }

@@ -21,15 +21,15 @@ fn chain() -> Scratch {
     s
 }
 
-/// A pre-commit hook that fails the first `n` commits made in the integration worktree,
-/// which is where the local markdown tracker commits mark-finished.
+/// A commit-msg hook that fails the first `n` mark-finished commits, which the local
+/// markdown tracker makes in the integration worktree.
 fn failing_commits(s: &Scratch, n: u32) {
-    let hook = s.repo.join(".git/hooks/pre-commit");
+    let hook = s.repo.join(".git/hooks/commit-msg");
     let count = s.bin.join("hook.count");
     fs::write(
         &hook,
         format!(
-            "#!/bin/sh\ncase \"$PWD\" in */_integration) ;; *) exit 0;; esac\n\
+            "#!/bin/sh\ncase \"$(head -n 1 \"$1\")\" in Mark*) ;; *) exit 0;; esac\n\
              n=$(($(cat '{c}' 2>/dev/null || echo 0) + 1))\necho $n > '{c}'\n\
              [ $n -gt {n} ] || {{ echo tracker down >&2; exit 1; }}\n",
             c = count.display()
@@ -42,6 +42,13 @@ fn failing_commits(s: &Scratch, n: u32) {
 fn run_log(s: &Scratch) -> String {
     let runs = s.repo_state(&s.state_root()).join("runs");
     fs::read_to_string(runs.join(s.run_id()).join("logs/run.log")).unwrap()
+}
+
+/// The one run's `run.log` while the run may still be creating its dirs, if it exists yet.
+fn run_log_so_far(s: &Scratch) -> Option<String> {
+    let first = |dir: &std::path::Path| Some(fs::read_dir(dir).ok()?.next()?.ok()?.path());
+    let run = first(&first(&s.state_root())?.join("runs"))?;
+    fs::read_to_string(run.join("logs/run.log")).ok()
 }
 
 /// Event messages without their `YYYY-MM-DD HH:MM:SS ` prefix.
@@ -105,8 +112,7 @@ fn a_tracker_that_stops_answering_pauses_new_starts_until_it_answers_again() {
         let run = scope.spawn(|| s.run(&["run", "auth", "--branch", "int"]));
         // The user notices the pause and brings the tracker back.
         let log = loop {
-            let log = s.state_root().exists().then(|| run_log(&s));
-            if let Some(log) = log.filter(|l| l.contains("run paused")) {
+            if let Some(log) = run_log_so_far(&s).filter(|l| l.contains("run paused")) {
                 break log;
             }
             assert!(!run.is_finished(), "the run ended without pausing");

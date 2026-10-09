@@ -5,7 +5,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 pub struct Scratch {
     _dir: tempfile::TempDir,
@@ -54,6 +55,32 @@ impl Scratch {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "git {args:?}: {err}");
         String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// A bare scratch remote `origin` beside the repo, holding the repo's `main`, whose
+    /// default branch is `main`. Read it back with `s.remote_refs()`.
+    pub fn remote(&self) {
+        let remote = self.remote_path();
+        self.git(&["init", "-q", "--bare", "-b", "main", &remote]);
+        self.git(&["remote", "add", "origin", &remote]);
+        self.git(&["push", "-q", "-u", "origin", "main"]);
+    }
+
+    fn remote_path(&self) -> String {
+        self.repo.with_file_name("remote.git").display().to_string()
+    }
+
+    /// Every ref of the scratch remote, with its sha and the remote's `HEAD`.
+    pub fn remote_refs(&self) -> String {
+        self.git(&["ls-remote", "--symref", &self.remote_path()])
+    }
+
+    /// Run git against the scratch remote's bare repo.
+    pub fn remote_git(&self, args: &[&str]) -> String {
+        let remote = self.remote_path();
+        let mut all = vec!["--git-dir", remote.as_str()];
+        all.extend_from_slice(args);
+        self.git(&all)
     }
 
     /// Write a file under the repo, creating parent directories.
@@ -181,9 +208,20 @@ printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,
 
     /// Run `orchestrate` from `cwd` with the scratch home, fakes first on `PATH`, and no stdin.
     pub fn run_in(&self, cwd: &Path, args: &[&str]) -> Run {
+        Run(self.command(cwd, args).output().unwrap())
+    }
+
+    /// Start `orchestrate` from the repo root in the background, output piped.
+    pub fn spawn(&self, args: &[&str]) -> Child {
+        let mut cmd = self.command(&self.repo, args);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.spawn().unwrap()
+    }
+
+    fn command(&self, cwd: &Path, args: &[&str]) -> Command {
         let path = format!("{}:{}", self.bin.display(), std::env::var("PATH").unwrap());
-        let out = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
-            .args(args)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_orchestrate"));
+        cmd.args(args)
             .current_dir(cwd)
             .env("HOME", &self.home)
             .env("PATH", path)
@@ -193,11 +231,31 @@ printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,
             // No D-Bus session bus, as on a headless Linux machine.
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env("XDG_RUNTIME_DIR", self.home.join("no-runtime-dir"))
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        Run(out)
+            .stdin(Stdio::null());
+        cmd
     }
+}
+
+/// Poll `cond` every 20ms; panic with `what` after 10 seconds.
+pub fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !cond() {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "timed out: {what}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Whether a process with this pid exists.
+pub fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
 }
 
 fn write(path: &Path, content: &str) {

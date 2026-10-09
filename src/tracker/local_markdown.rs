@@ -14,10 +14,12 @@ use crate::git::git;
 use crate::markdown;
 
 const SPEC_FILE: &str = "spec.md";
+const LOG: &str = "Orchestrate log";
 
 pub struct LocalMarkdown {
     pub root: PathBuf,
     pub ready: String,
+    pub criteria_headings: Vec<String>,
 }
 
 impl LocalMarkdown {
@@ -42,6 +44,25 @@ impl LocalMarkdown {
             }
         }
         Ok(None)
+    }
+
+    fn ticket_path(&self, ticket: &str) -> Result<PathBuf> {
+        match self.find_ticket(ticket)? {
+            Some(path) => Ok(path),
+            None => bail!("ticket `{ticket}` not found under {}", self.root.display()),
+        }
+    }
+
+    /// Writes `text` to `path` and commits only that file; a failed commit restores it,
+    /// so a retry starts from the committed file.
+    fn commit(&self, path: &Path, text: &str, message: &str) -> Result<()> {
+        fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+        let file = path.to_string_lossy();
+        let committed = git(&self.root, &["commit", "-q", "-m", message, "--", &file]);
+        if committed.is_err() {
+            git(&self.root, &["checkout", "--", &file])?;
+        }
+        committed.map(drop)
     }
 }
 
@@ -95,9 +116,7 @@ impl Tracker for LocalMarkdown {
     /// Rewrites the `Status:` line to `done` and commits the file where it lives.
     /// `root` is inside the integration worktree during a run, never the user's checkout.
     fn mark_finished(&self, ticket: &str) -> Result<()> {
-        let Some(path) = self.find_ticket(ticket)? else {
-            bail!("ticket `{ticket}` not found under {}", self.root.display());
-        };
+        let path = self.ticket_path(ticket)?;
         let body = read(&path)?;
         let mut found = false;
         let lines: Vec<String> = body
@@ -118,11 +137,34 @@ impl Tracker for LocalMarkdown {
         if body.ends_with('\n') {
             text.push('\n');
         }
-        fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
-        let file = path.to_string_lossy();
-        let message = format!("Mark {ticket} finished");
-        git(&self.root, &["commit", "-q", "-m", &message, "--", &file])?;
-        Ok(())
+        self.commit(&path, &text, &format!("Mark {ticket} finished"))
+    }
+
+    /// Appends a timestamped entry to the `## Orchestrate log` section, which is created
+    /// at the end of the file if missing.
+    fn comment(&self, ticket: &str, markdown: &str) -> Result<()> {
+        let path = self.ticket_path(ticket)?;
+        let mut text = read(&path)?;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        // shortcut: an existing log section is assumed to be last; entries go at the file end.
+        if markdown::section(&text, &[LOG]).is_none() {
+            text.push_str(&format!("\n## {LOG}\n"));
+        }
+        let now = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S");
+        text.push_str(&format!("\n### {now}\n\n{}\n", markdown.trim_end()));
+        self.commit(&path, &text, &format!("Comment on {ticket}"))
+    }
+
+    fn tick(&self, ticket: &str, criteria: &[String]) -> Result<Vec<String>> {
+        let path = self.ticket_path(ticket)?;
+        let body = read(&path)?;
+        let (text, missing) = markdown::tick(&body, &self.criteria_headings, criteria);
+        if text != body {
+            self.commit(&path, &text, &format!("Tick criteria of {ticket}"))?;
+        }
+        Ok(missing)
     }
 }
 
@@ -173,4 +215,101 @@ fn line_value<'a>(body: &'a str, prefix: &str) -> Option<&'a str> {
     body.lines()
         .find_map(|l| l.trim_start().strip_prefix(prefix))
         .map(str::trim)
+}
+
+#[cfg(test)]
+mod contract {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::LocalMarkdown;
+    use crate::git::git;
+    use crate::tracker::Tracker;
+    use crate::tracker::contract::{self, HEADINGS, SPEC_TITLE, Status, TICKETS};
+
+    struct Local {
+        dir: tempfile::TempDir,
+        tracker: LocalMarkdown,
+    }
+
+    impl Local {
+        fn file(&self, name: &str) -> PathBuf {
+            self.tracker.root.join("login").join(format!("{name}.md"))
+        }
+    }
+
+    impl contract::Harness for Local {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let tracker = LocalMarkdown {
+                root: dir.path().join("specs"),
+                ready: "ready-for-agent".into(),
+                criteria_headings: HEADINGS.iter().map(|h| h.to_string()).collect(),
+            };
+            let h = Local { dir, tracker };
+            fs::create_dir_all(h.tracker.root.join("login")).unwrap();
+            fs::write(h.file("spec"), format!("# {SPEC_TITLE}\n")).unwrap();
+            for t in TICKETS {
+                let status = match t.status {
+                    Status::Open => "needs-triage",
+                    Status::Ready => "ready-for-agent",
+                    Status::Finished => "done",
+                };
+                let blockers: Vec<_> = t.blocked_by.iter().map(|b| b.to_string()).collect();
+                let body = contract::body(t, &blockers);
+                let text = format!("# {}\nStatus: {status}\n\n{body}", t.title);
+                fs::write(h.file(t.name), text).unwrap();
+            }
+            commit_all(h.dir.path());
+            h
+        }
+
+        fn tracker(&self) -> &dyn Tracker {
+            &self.tracker
+        }
+
+        fn spec_id(&self) -> String {
+            "login".into()
+        }
+
+        fn id(&self, name: &str) -> String {
+            name.into()
+        }
+
+        fn edit_criterion(&self, name: &str, from: &str, to: &str) {
+            let text = fs::read_to_string(self.file(name)).unwrap();
+            fs::write(self.file(name), text.replace(from, to)).unwrap();
+        }
+
+        fn has_comment(&self, name: &str, text: &str) -> bool {
+            fs::read_to_string(self.file(name)).unwrap().contains(text)
+        }
+
+        fn fail(&self) {
+            fs::remove_dir_all(&self.tracker.root).unwrap();
+        }
+
+        fn garble(&self) {
+            for entry in fs::read_dir(self.tracker.root.join("login")).unwrap() {
+                fs::write(entry.unwrap().path(), b"\xff\xfe not utf-8").unwrap();
+            }
+        }
+    }
+
+    /// A repo holding the fixture, isolated from the user's git hooks and signing.
+    fn commit_all(top: &Path) {
+        git(top, &["init", "-q"]).unwrap();
+        for (k, v) in [
+            ("user.name", "t"),
+            ("user.email", "t@example.com"),
+            ("commit.gpgsign", "false"),
+            ("core.hooksPath", "/dev/null"),
+        ] {
+            git(top, &["config", k, v]).unwrap();
+        }
+        git(top, &["add", "."]).unwrap();
+        git(top, &["commit", "-q", "-m", "fixture"]).unwrap();
+    }
+
+    contract::suite!(Local);
 }

@@ -22,6 +22,7 @@ const REPO_KEYS: &[&str] = &[
     "session",
     "seed_files",
     "prepare",
+    "protected_branches",
 ];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
 
@@ -39,6 +40,8 @@ pub struct RepoConfig {
     pub seed_files: Vec<PathBuf>,
     /// A shell command run in each fresh worktree before its session.
     pub prepare: Option<String>,
+    /// Branches a run never writes; `None` means the remote's default branch.
+    pub protected_branches: Option<Vec<String>>,
 }
 
 /// `[[gates]]`: a shell command run in the rebased ticket worktree; exit 0 passes.
@@ -47,6 +50,23 @@ pub struct RepoConfig {
 pub struct Gate {
     pub name: String,
     pub run: String,
+    /// Globs against the ticket's changed files; empty means all files.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Folders (`*` allowed per segment); the gate runs once in each one the change touched.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+    /// Fixed working directory relative to the top level, for a gate without `dirs`.
+    pub cwd: Option<String>,
+    /// How long the gate may run before it is killed and fails.
+    #[serde(default = "default_gate_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
+    /// A shell command run after the gate in the same directory, even after a timeout.
+    pub teardown: Option<String>,
+}
+
+fn default_gate_timeout() -> Duration {
+    Duration::from_secs(20 * 60)
 }
 
 /// `[session]`: how sessions are launched and prompted.
@@ -110,6 +130,15 @@ impl FromStr for MaxParallel {
             .parse()
             .map_err(|_| "expected `auto` or a number above 0")?;
         Ok(Self(Some(n)))
+    }
+}
+
+impl std::fmt::Display for MaxParallel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.0 {
+            Some(n) => write!(f, "{n}"),
+            None => f.write_str("auto"),
+        }
     }
 }
 
@@ -194,10 +223,23 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
         }
         None => MachineConfig::default(),
     };
-    let repo = repo
+    let repo: RepoConfig = repo
         .try_into()
         .with_context(|| format!("{}", repo_path.display()))?;
+    for gate in &repo.gates {
+        check_gate(gate).with_context(|| format!("{}", repo_path.display()))?;
+    }
     Ok((repo, machine))
+}
+
+fn check_gate(gate: &Gate) -> Result<()> {
+    if !gate.dirs.is_empty() && gate.cwd.is_some() {
+        bail!("gate {}: set `dirs` or `cwd`, not both", gate.name);
+    }
+    for pattern in gate.paths.iter().chain(&gate.dirs) {
+        crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
+    }
+    Ok(())
 }
 
 fn machine_config_path() -> Result<PathBuf> {

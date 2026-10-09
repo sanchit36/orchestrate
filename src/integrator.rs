@@ -1,14 +1,14 @@
 //! Integrator: rebases a ticket branch onto the integration branch, runs the gates
 //! and merges it `--no-ff`.
 
-use std::fs::File;
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::config::Gate;
+use crate::gate;
 use crate::git::{git, succeeds};
+use crate::state::GateResult;
 
 /// Where integration happens.
 pub struct Integration<'a> {
@@ -24,7 +24,8 @@ pub enum Landing {
 }
 
 /// Land the ticket branch checked out at `ticket_wt`. Gate output goes to
-/// `<logs>/<slug>.gate-<name>.log`.
+/// `<logs>/<slug>.gate-<name>.log`; each gate run's exit code goes to `results`.
+#[expect(clippy::too_many_arguments)]
 pub fn land(
     into: &Integration,
     ticket_wt: &Path,
@@ -33,25 +34,19 @@ pub fn land(
     logs: &Path,
     slug: &str,
     message: &str,
+    results: &mut Vec<GateResult>,
 ) -> Result<Landing> {
     if !succeeds(ticket_wt, &["rebase", "-q", into.branch])? {
         git(ticket_wt, &["rebase", "--abort"])?;
         return Ok(Landing::Failed("rebase conflict".into()));
     }
-    for gate in gates {
-        let log = logs.join(format!("{slug}.gate-{}.log", gate.name));
-        let out = File::create(&log).with_context(|| format!("creating {}", log.display()))?;
-        let status = Command::new("sh")
-            .args(["-c", &gate.run])
-            .current_dir(ticket_wt)
-            .stdout(out.try_clone()?)
-            .stderr(out)
-            .status()
-            .with_context(|| format!("running gate {}", gate.name))?;
-        if !status.success() {
-            let code = status.code().unwrap_or(-1);
-            return Ok(Landing::Failed(format!("gate {} exited {code}", gate.name)));
-        }
+    let changed = git(
+        ticket_wt,
+        &["diff", "-z", "--name-only", into.branch, "HEAD"],
+    )?;
+    let changed: Vec<String> = changed.split_terminator('\0').map(String::from).collect();
+    if let Some(reason) = gate::run_all(gates, ticket_wt, &changed, logs, slug, results)? {
+        return Ok(Landing::Failed(reason));
     }
     git(
         into.worktree,

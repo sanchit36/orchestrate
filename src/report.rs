@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const REPORT_FILE: &str = ".orchestrate-result.json";
 
@@ -15,10 +15,12 @@ pub enum Status {
     Stuck,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Criterion {
     pub text: String,
     pub met: bool,
+    #[serde(default)]
+    pub evidence: String,
 }
 
 #[derive(Deserialize)]

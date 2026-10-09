@@ -1,6 +1,9 @@
 mod config;
+mod control;
+mod gate;
 mod git;
 mod integrator;
+mod lock;
 mod markdown;
 mod planner;
 mod prompt;
@@ -10,9 +13,12 @@ mod run;
 mod session;
 mod spec;
 mod state;
+mod status;
 mod tracker;
 mod worktree;
+mod writeback;
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -45,7 +51,26 @@ enum Cmd {
         /// Defaults to the machine config's `max_parallel`, else `auto`.
         #[arg(long)]
         max_parallel: Option<config::MaxParallel>,
+        /// Keep running in the background after the terminal closes.
+        #[arg(long)]
+        detach: bool,
     },
+    /// Stop the live run: kill its sessions and mark it stopped.
+    Stop {
+        /// The run to stop: its id or an id prefix.
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Show where a run is, or diagnose one of its tickets. Reads run state only.
+    Status {
+        /// A ticket id: show its criteria, notes, gates, worktree and logs.
+        ticket: Option<String>,
+        /// A run id, unique id prefix or spec id; default the most recent run.
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// List this repo's runs, most recent first.
+    Runs,
 }
 
 fn main() -> ExitCode {
@@ -56,12 +81,22 @@ fn main() -> ExitCode {
             spec,
             branch,
             max_parallel,
-        } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch, max_parallel)),
+            detach,
+        } => git_toplevel().and_then(|top| match detach {
+            true => control::detach(&top, &spec, &branch, max_parallel),
+            false => run::run(&top, &spec, &branch, max_parallel),
+        }),
+        Cmd::Stop { run } => git_toplevel().and_then(|top| control::stop(&top, run.as_deref())),
+        Cmd::Status { ticket, run } => {
+            git_toplevel().and_then(|top| status::status(&top, run.as_deref(), ticket.as_deref()))
+        }
+        Cmd::Runs => git_toplevel().and_then(|top| status::runs(&top)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("orchestrate: {e:#}");
+            // A detached run's stderr may be gone; a failed write must not panic.
+            let _ = writeln!(std::io::stderr(), "orchestrate: {e:#}");
             ExitCode::FAILURE
         }
     }
