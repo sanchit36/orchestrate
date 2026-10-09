@@ -59,3 +59,16 @@ Use `stuck` when you cannot finish, and say why in `notes`.
     }
     Ok(prompt)
 }
+
+/// The prompt for a conflict-resolution session, started with the worktree mid-rebase
+/// of `branch` onto the integration branch `onto`.
+pub fn conflict(branch: &str, onto: &str) -> String {
+    format!(
+        "You are resolving a rebase conflict, unattended, in a git worktree of this repo.
+Branch `{branch}` is being rebased onto `{onto}` and stopped on a conflict.
+Resolve every conflict keeping the intent of both sides, `git add` the files, and run
+`GIT_EDITOR=true git rebase --continue` until the rebase is complete.
+Do not abort the rebase, do not push, do not switch branches, and never read or write the issue tracker.
+"
+    )
+}

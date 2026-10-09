@@ -219,6 +219,7 @@ pub fn drive(
         }
         Ok(())
     })?;
+    worktree::remove_worktree(top, &integration_wt)?;
 
     let (counts, problems) = store.update(|state| {
         state.status = "ended".into();
@@ -420,6 +421,7 @@ impl Run<'_> {
                     &wt,
                     &branch,
                     &self.config.gates,
+                    &self.config.session,
                     &self.dirs.logs,
                     &slug,
                     &message,

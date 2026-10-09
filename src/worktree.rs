@@ -45,11 +45,17 @@ pub fn create(top: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
 
 /// Remove the worktree at `path` and delete `branch`.
 pub fn remove(top: &Path, path: &Path, branch: &str) -> Result<()> {
+    remove_worktree(top, path)?;
+    git(top, &["branch", "-D", branch])?;
+    Ok(())
+}
+
+/// Remove the worktree at `path`, keeping its branch.
+pub fn remove_worktree(top: &Path, path: &Path) -> Result<()> {
     git(
         top,
         &["worktree", "remove", "--force", &path.to_string_lossy()],
     )?;
-    git(top, &["branch", "-D", branch])?;
     Ok(())
 }
 

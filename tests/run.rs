@@ -60,11 +60,11 @@ fn the_integration_branch_is_created_from_head_with_its_worktree_under_the_run()
         .join("worktrees")
         .join(s.run_id())
         .join("_integration");
+    // Removed at run end; the branch keeps every merge.
+    assert!(!wt.exists());
     let list = s.git(&["worktree", "list", "--porcelain"]);
-    assert!(
-        list.contains(&format!("worktree {}\n", wt.display())),
-        "{list}"
-    );
+    assert!(!list.contains(&wt.display().to_string()), "{list}");
+    assert_eq!(s.git(&["rev-list", "--merges", "--count", "int"]), "2\n");
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn status_done_is_committed_on_the_integration_branch_not_in_the_users_checkout(
 }
 
 #[test]
-fn landed_ticket_worktrees_and_branches_are_removed() {
+fn landed_ticket_worktrees_branches_and_the_integration_worktree_are_removed() {
     let s = chain();
 
     s.run(&["run", "auth", "--branch", "int"]).ok();
@@ -245,10 +245,11 @@ fn landed_ticket_worktrees_and_branches_are_removed() {
         .join("worktrees")
         .join(s.run_id());
     let left: Vec<_> = std::fs::read_dir(worktrees)
-        .unwrap()
+        .into_iter()
+        .flatten()
         .map(|e| e.unwrap().file_name())
         .collect();
-    assert_eq!(left, ["_integration"]);
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[test]
