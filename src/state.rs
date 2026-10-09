@@ -104,6 +104,12 @@ pub struct State {
 pub struct TicketState {
     pub title: String,
     pub outcome: String,
+    /// Why a ticket failed, timed out, got stuck, or was held or skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The criteria a stuck session reported unmet.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unmet: Vec<String>,
 }
 
 impl State {
