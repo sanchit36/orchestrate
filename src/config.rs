@@ -167,12 +167,32 @@ pub struct TrackerConfig {
     pub probe_backoff: Duration,
     #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
     pub probe_backoff_max: Duration,
+    /// The templates of `kind = "commands"`, and only of that kind.
+    pub commands: Option<Commands>,
+}
+
+/// `[tracker.commands]`: shell command templates reaching a tracker without a built-in
+/// adapter. `{id}` is replaced by the shell-quoted spec or ticket id.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Commands {
+    pub get_spec: String,
+    pub list_tickets: String,
+    pub list_blockers: String,
+    pub mark_finished: String,
+    pub comment: Option<String>,
+    pub tick: Option<String>,
+    /// The tracker guide (relative to the top level) the templates were compiled from,
+    /// and its hash (`sha256:<hex>`) at that time.
+    pub guide: Option<PathBuf>,
+    pub guide_hash: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TrackerKind {
     LocalMarkdown,
+    Commands,
 }
 
 fn default_ready() -> String {
@@ -226,6 +246,13 @@ pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
     let repo: RepoConfig = repo
         .try_into()
         .with_context(|| format!("{}", repo_path.display()))?;
+    let commands_kind = matches!(repo.tracker.kind, TrackerKind::Commands);
+    if commands_kind != repo.tracker.commands.is_some() {
+        bail!(
+            "{}: `[tracker.commands]` goes with `kind = \"commands\"` and nothing else",
+            repo_path.display()
+        );
+    }
     for gate in &repo.gates {
         check_gate(gate).with_context(|| format!("{}", repo_path.display()))?;
     }
@@ -243,8 +270,13 @@ fn check_gate(gate: &Gate) -> Result<()> {
 }
 
 fn machine_config_path() -> Result<PathBuf> {
+    Ok(machine_dir()?.join("config.toml"))
+}
+
+/// `~/.config/orchestrate`: the machine config and the template approvals.
+pub fn machine_dir() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config/orchestrate/config.toml"))
+    Ok(PathBuf::from(home).join(".config/orchestrate"))
 }
 
 /// The parsed file, or `None` when it does not exist.
