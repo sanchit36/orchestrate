@@ -32,7 +32,9 @@ Issue types (default task, bug, feature, up to 25) are configured at the organiz
 Native issue dependencies went GA on 2025-08-21, with up to 50 issues per relationship type (blocked by, blocking) and search filters `is:blocked`, `is:blocking`, `blocked-by:` and `blocking:` ([changelog](https://github.blog/changelog/2025-08-21-dependencies-on-issues/)).
 REST has list, add and remove for `.../dependencies/blocked_by` and a list for `.../dependencies/blocking`; the add body is `issue_id`, again the numeric id ([issue dependencies REST](https://docs.github.com/en/rest/issues/issue-dependencies)).
 Every issue object carries `issue_dependencies_summary` with `blocked_by`, `blocking`, `total_blocked_by` and `total_blocking`; the docs do not define the difference between the plain and `total_` counts ([issue dependencies REST](https://docs.github.com/en/rest/issues/issue-dependencies)).
-**Observed** on this repo: issue #3 returned `blocked_by: 1, total_blocked_by: 1` while its blocker #2 was open (see the note at the end of this file for the after-close reading).
+**Observed** on this repo: issue #3 returned `blocked_by: 1, total_blocked_by: 1` while its only blocker #2 was open.
+Immediately after #2 was closed it still returned `blocked_by: 1`; about a minute later it returned `blocked_by: 0, total_blocked_by: 1`.
+So `blocked_by` counts open blockers and `total_blocked_by` counts all of them, but the summary updates asynchronously, so a script that closes a ticket and immediately recomputes the frontier can read a stale count.
 Dependencies are also in GraphQL (`addBlockedBy`) and webhooks ([changelog](https://github.blog/changelog/2025-08-21-dependencies-on-issues/)).
 
 ### Labels, status and workflow state
@@ -259,6 +261,7 @@ Writes are visible to sessions in other worktrees only after they are committed 
 ## Implications for an orchestrator
 
 - Every tracker can express "spec owns tickets" and "ticket is blocked by ticket", but only GitHub (and GitLab Premium, if `blockedByCount` excludes closed blockers) hands back a ready-made open-blocker count; elsewhere the frontier is computed by fetching each blocker's state.
+- GitHub's open-blocker count lags a close by some seconds (observed above), so it is eventually consistent, not a read-after-write gate.
 - "Finished" means a different thing per tracker: `closed` on GitHub and GitLab, `state.type` in `completed` or `canceled` on Linear, status category Done on Jira, and an undefined `Status:` value locally.
 - Blocking is not uniformly native: GitLab Free and local markdown need a `Blocked by:` body line, and the local format already differs between `issue-tracker-local.md` and `to-tickets`.
 - Jira's blocking link has no API-level meaning; the link type name and direction must be configured per site.
