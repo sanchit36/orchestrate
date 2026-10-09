@@ -105,6 +105,9 @@ fn main() -> ExitCode {
 fn plan(spec_id: &str) -> Result<()> {
     let top = git_toplevel()?;
     let (config, _) = config::load(&top)?;
+    for warning in tracker::check(&config, &top)? {
+        eprintln!("orchestrate: warning: {warning}");
+    }
     let tracker = tracker::open(&config, &top);
     let reading = spec::read(tracker.as_ref(), spec_id, &config.criteria_headings)?;
     let plan = planner::plan(&reading)?;
