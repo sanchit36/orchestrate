@@ -94,6 +94,34 @@ fn criteria_are_only_checkboxes_directly_under_a_matching_heading() {
 }
 
 #[test]
+fn a_comma_in_link_text_and_headings_in_code_fences_are_read_as_written() {
+    let s = Scratch::new();
+    s.local_markdown_tracker();
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "00", "Done one", "done", &[]);
+    let ready = "ready-for-agent";
+    let blocked = format!("Blocked by: [Done, at last](00.md)\n\n{CRITERIA}");
+    raw_ticket(&s, "auth", "01", ready, &blocked);
+    raw_ticket(
+        &s,
+        "auth",
+        "02",
+        ready,
+        "```md\n## Acceptance criteria\n```\n",
+    );
+    let fenced = "## Acceptance criteria\n\n```sh\n# set up first\n```\n\n- [ ] it works\n";
+    raw_ticket(&s, "auth", "03", ready, fenced);
+
+    let out = s.run(&["plan", "auth"]).ok();
+
+    assert!(out.contains("  01  Title 01\n"), "{out}");
+    assert!(
+        out.ends_with("\nWarnings:\n  02: no acceptance criteria\n"),
+        "{out}"
+    );
+}
+
+#[test]
 fn criteria_heading_names_are_configurable() {
     let s = Scratch::new();
     s.repo_config(
