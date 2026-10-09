@@ -176,6 +176,11 @@ impl Run<'_> {
         let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
         worktree::create(self.top, &wt, &branch, self.into.branch)?;
         events.event(&format!("ticket {} started: {}", ticket.id, ticket.title));
+        let prepare_log = self.dirs.logs.join(format!("{slug}.prepare.log"));
+        if let Some(reason) = worktree::prepare(self.top, &wt, self.config, &prepare_log)? {
+            events.event(&format!("ticket {} failed: {reason}", ticket.id));
+            return Ok("failed");
+        }
 
         let session = &self.config.session;
         let prompt = prompt::render(session, self.top, &reading.spec.body, &ticket.body, &branch)?;
