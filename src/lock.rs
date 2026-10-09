@@ -17,6 +17,8 @@ pub struct Holder {
 /// Held by the live run; dropping it removes the lock file.
 pub struct Lock {
     pub path: PathBuf,
+    /// The notice of a lock taken over from a dead run, for the run to report.
+    pub taken_over: Option<String>,
 }
 
 impl Drop for Lock {
@@ -41,9 +43,15 @@ pub fn acquire(repo_dir: &Path, run: &str) -> Result<Lock> {
         run: run.into(),
     };
     fs::write(&tmp, toml::to_string(&holder)?)?;
+    let mut taken_over = None;
     let taken = loop {
         match fs::hard_link(&tmp, &lock) {
-            Ok(()) => break Ok(Lock { path: lock }),
+            Ok(()) => {
+                break Ok(Lock {
+                    path: lock,
+                    taken_over,
+                });
+            }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             Err(e) => break Err(e).with_context(|| format!("creating {}", lock.display())),
         }
@@ -56,10 +64,10 @@ pub fn acquire(repo_dir: &Path, run: &str) -> Result<Lock> {
                 old.pid
             );
         }
-        eprintln!(
-            "orchestrate: taking over the lock of run {}: its pid {} is gone",
+        taken_over = Some(format!(
+            "taking over the lock of run {}: its pid {} is gone",
             old.run, old.pid
-        );
+        ));
         match fs::remove_file(&lock) {
             Err(e) if e.kind() != ErrorKind::NotFound => break Err(e.into()),
             _ => {}

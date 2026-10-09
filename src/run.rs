@@ -107,7 +107,8 @@ pub fn drive(
     if !integration_wt.exists() {
         worktree::integration(top, &integration_wt, branch)?;
     }
-    for line in started {
+    // First, so a detached run keeps the notice in its log.
+    for line in dirs.lock.taken_over.iter().chain(started) {
         events.event(line);
     }
 

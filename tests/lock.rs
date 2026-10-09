@@ -77,11 +77,28 @@ fn a_lock_whose_pid_is_gone_is_taken_over_with_a_notice() {
     )
     .unwrap();
 
-    let out = s.run(&["run", "auth", "--branch", "int2"]);
+    let out = s.run(&["run", "auth", "--branch", "int2"]).ok();
 
-    out.ok();
-    assert!(out.stderr().contains("auth-old"), "{}", out.stderr());
+    let notice = format!(
+        "taking over the lock of run auth-old: its pid {} is gone",
+        gone.id()
+    );
+    assert!(out.contains(&notice), "{out}");
     assert!(!repo_dir.join("lock").exists());
+
+    // Detached, the notice is in the run log.
+    fs::write(
+        repo_dir.join("lock"),
+        format!("pid = {}\nrun = \"auth-old\"\n", gone.id()),
+    )
+    .unwrap();
+    let out = s.run(&["run", "auth", "--branch", "int3", "--detach"]).ok();
+    let log = out.lines().find_map(|l| l.strip_prefix("log: ")).unwrap();
+    wait_until("detached run ended", || {
+        fs::read_to_string(log).is_ok_and(|l| l.contains("push it with"))
+    });
+    let log = fs::read_to_string(log).unwrap();
+    assert!(log.contains(&notice), "{log}");
 }
 
 #[test]
