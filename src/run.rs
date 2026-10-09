@@ -137,99 +137,109 @@ pub fn drive(
     let mut wait = config.tracker.probe_backoff;
     thread::scope(|scope| -> Result<()> {
         let (tx, rx) = mpsc::channel::<Msg<Done>>();
-        loop {
-            let reading = spec::reread(&tracker, spec_id, headings)?;
-            store.update(|state| {
-                for t in reading.tickets.iter().map(|e| &e.ticket) {
-                    let seen = state
-                        .tickets
-                        .entry(t.id.clone())
-                        .or_insert_with(|| TicketState {
-                            outcome: if t.finished { "finished" } else { "pending" }.into(),
-                            ..TicketState::default()
-                        });
-                    seen.title = t.title.clone();
+        let mut dispatch = || -> Result<()> {
+            loop {
+                let reading = spec::reread(&tracker, spec_id, headings)?;
+                store.update(|state| {
+                    for t in reading.tickets.iter().map(|e| &e.ticket) {
+                        let seen =
+                            state
+                                .tickets
+                                .entry(t.id.clone())
+                                .or_insert_with(|| TicketState {
+                                    outcome: if t.finished { "finished" } else { "pending" }.into(),
+                                    ..TicketState::default()
+                                });
+                        seen.title = t.title.clone();
+                    }
+                })?;
+                match planner::plan(&reading) {
+                    Err(e) => {
+                        // Like a pause: nothing new starts; running sessions finish.
+                        if !cycle {
+                            events.event(&format!("run paused: {e:#}"));
+                            cycle = true;
+                        }
+                    }
+                    Ok(plan) => {
+                        if cycle {
+                            events.event("run recovered: blocking cycle resolved");
+                            (cycle, wait) = (false, config.tracker.probe_backoff);
+                        }
+                        let free = planner::ceiling(max, &reading).saturating_sub(running);
+                        // Tracker order; no model call.
+                        let next: Vec<_> = plan
+                            .frontier
+                            .into_iter()
+                            .filter(|t| !tried.contains(&t.id))
+                            .take(free)
+                            .collect();
+                        for ticket in next {
+                            tried.insert(ticket.id.clone());
+                            store.update(|s| {
+                                s.tickets.get_mut(&ticket.id).map(|t| {
+                                    t.outcome = "running".into();
+                                    t.started = Some(jiff::Timestamp::now().to_string());
+                                })
+                            })?;
+                            running += 1;
+                            let (reading, ticket) = (reading.clone(), ticket.clone());
+                            let tx = tx.clone();
+                            scope.spawn(move || {
+                                let remote = Remote(tx.clone());
+                                let run = Run {
+                                    top,
+                                    config,
+                                    dirs,
+                                    into,
+                                    tracker: &remote,
+                                    cx,
+                                    store: store_ref,
+                                    landing,
+                                };
+                                let outcome = Events::open(&dirs.logs.join("run.log")).and_then(
+                                    |mut events| run.work(&reading, &ticket, &mut events),
+                                );
+                                let _ = tx.send(Msg::Done((ticket.id, outcome)));
+                            });
+                        }
+                    }
                 }
-            })?;
-            match planner::plan(&reading) {
-                Err(e) => {
-                    // Like a pause: nothing new starts; running sessions finish.
+                if running == 0 {
                     if !cycle {
-                        events.event(&format!("run paused: {e:#}"));
-                        cycle = true;
+                        break;
                     }
+                    thread::sleep(wait);
+                    wait = (wait * 2).min(config.tracker.probe_backoff_max);
+                    continue;
                 }
-                Ok(plan) => {
-                    if cycle {
-                        events.event("run recovered: blocking cycle resolved");
-                        (cycle, wait) = (false, config.tracker.probe_backoff);
+                // Serve the workers' tracker calls until one ticket's work ends.
+                let (id, outcome) = loop {
+                    match rx.recv()? {
+                        Msg::Call(call) => call(&tracker),
+                        Msg::Done(done) => break done,
                     }
-                    let free = planner::ceiling(max, &reading).saturating_sub(running);
-                    // Tracker order; no model call.
-                    let next: Vec<_> = plan
-                        .frontier
-                        .into_iter()
-                        .filter(|t| !tried.contains(&t.id))
-                        .take(free)
-                        .collect();
-                    for ticket in next {
-                        tried.insert(ticket.id.clone());
-                        store.update(|s| {
-                            s.tickets.get_mut(&ticket.id).map(|t| {
-                                t.outcome = "running".into();
-                                t.started = Some(jiff::Timestamp::now().to_string());
-                            })
-                        })?;
-                        running += 1;
-                        let (reading, ticket) = (reading.clone(), ticket.clone());
-                        let tx = tx.clone();
-                        scope.spawn(move || {
-                            let remote = Remote(tx.clone());
-                            let run = Run {
-                                top,
-                                config,
-                                dirs,
-                                into,
-                                tracker: &remote,
-                                cx,
-                                store: store_ref,
-                                landing,
-                            };
-                            let outcome = Events::open(&dirs.logs.join("run.log"))
-                                .and_then(|mut events| run.work(&reading, &ticket, &mut events));
-                            let _ = tx.send(Msg::Done((ticket.id, outcome)));
-                        });
+                };
+                running -= 1;
+                let outcome = outcome?;
+                let kind = outcome.kind;
+                let title = store.update(|s| s.tickets.get(&id).map(|t| t.title.clone()))?;
+                events.notify(&format!("{id} {}: {kind}", title.unwrap_or_default()));
+                store.update(|state| {
+                    set_outcome(state, &id, outcome);
+                    if kind != "finished" {
+                        block_dependents(state, &reading, &id, kind, &mut events);
                     }
-                }
+                })?;
             }
-            if running == 0 {
-                if !cycle {
-                    break;
-                }
-                thread::sleep(wait);
-                wait = (wait * 2).min(config.tracker.probe_backoff_max);
-                continue;
-            }
-            // Serve the workers' tracker calls until one ticket's work ends.
-            let (id, outcome) = loop {
-                match rx.recv()? {
-                    Msg::Call(call) => call(&tracker),
-                    Msg::Done(done) => break done,
-                }
-            };
-            running -= 1;
-            let outcome = outcome?;
-            let kind = outcome.kind;
-            let title = store.update(|s| s.tickets.get(&id).map(|t| t.title.clone()))?;
-            events.notify(&format!("{id} {}: {kind}", title.unwrap_or_default()));
-            store.update(|state| {
-                set_outcome(state, &id, outcome);
-                if kind != "finished" {
-                    block_dependents(state, &reading, &id, kind, &mut events);
-                }
-            })?;
+            Ok(())
+        };
+        let dispatched = dispatch();
+        if dispatched.is_err() {
+            // The scope waits for every ticket's thread: end their sessions, not wait them out.
+            session::kill_all();
         }
-        Ok(())
+        dispatched
     })?;
     // A worktree left behind is for `clean`; the run itself has ended.
     if let Err(e) = worktree::remove_worktree(top, &integration_wt) {

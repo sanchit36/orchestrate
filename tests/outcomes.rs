@@ -228,6 +228,34 @@ fn the_session_timeout_is_a_duration_string() {
 }
 
 #[test]
+fn an_orchestrator_that_errors_kills_its_running_sessions_instead_of_waiting() {
+    let s = Scratch::new();
+    spec(&s, "");
+    let pid = s.repo.parent().unwrap().join("c.pid");
+    let pid_path = pid.display();
+    // `a` breaks its own worktree once `c` is running, so the run errors.
+    claude(
+        &s,
+        &format!(
+            "a) until [ -s '{pid_path}' ]; do sleep 0.05; done; rm .git;;\n\
+             c) sleep 30 & echo $! > '{pid_path}'; wait;;"
+        ),
+    );
+    let started = Instant::now();
+
+    s.run(&["run", "auth", "--branch", "int", "--max-parallel", "2"])
+        .fails();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    let pid = std::fs::read_to_string(pid).unwrap();
+    assert!(!alive(pid.trim()), "session {pid} survived");
+}
+
+#[test]
 fn an_interrupted_orchestrator_kills_its_sessions() {
     for signal in ["INT", "TERM", "HUP"] {
         let s = Scratch::new();
