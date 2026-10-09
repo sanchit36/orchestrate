@@ -178,7 +178,7 @@ run = "make test"
 | --- | --- | --- |
 | `max_parallel` | `"auto"` | The default for `run --max-parallel`: `"auto"` (from the width of the ticket graph and the CPU cores) or a number above 0. |
 | `notifications` | `true` | Desktop notifications for the events of a run. |
-| `state_dir` | `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate` | Where runs keep their state, logs and worktrees. Give an absolute path; `~` is not expanded. |
+| `state_dir` | `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate` | Where runs keep their state, logs and worktrees. An absolute path, or one starting with `~/` for your home folder. |
 
 ### Example
 

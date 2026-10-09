@@ -73,7 +73,11 @@ pub fn repo_dir(machine: &MachineConfig, top: &Path) -> Result<PathBuf> {
 /// `state_dir`, else `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate`.
 pub fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
     if let Some(dir) = &machine.state_dir {
-        return Ok(dir.clone());
+        let Ok(in_home) = dir.strip_prefix("~") else {
+            return Ok(dir.clone());
+        };
+        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        return Ok(PathBuf::from(home).join(in_home));
     }
     match std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
         Some(xdg) => Ok(PathBuf::from(xdg).join("orchestrate")),

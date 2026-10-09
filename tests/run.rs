@@ -112,6 +112,18 @@ fn a_ticket_works_in_its_own_worktree_and_branch_under_the_state_dir() {
 }
 
 #[test]
+fn a_state_dir_starting_with_a_tilde_is_under_home() {
+    let s = chain();
+    s.machine_config("version = 1\nnotifications = false\nstate_dir = \"~/runs-here\"\n");
+
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(!s.repo.join("~").exists());
+    let runs = s.repo_state(&s.home.join("runs-here")).join("runs");
+    assert_eq!(std::fs::read_dir(runs).unwrap().count(), 1);
+}
+
+#[test]
 fn the_run_id_is_the_spec_slug_and_local_time_and_state_keeps_the_real_spec_id() {
     let s = Scratch::new();
     s.local_markdown_tracker_with_gate("true");
