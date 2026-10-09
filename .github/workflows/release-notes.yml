@@ -1,0 +1,26 @@
+# Called by release.yml (dist post-announce job): puts GitHub's generated
+# release notes above dist's install instructions.
+name: Release notes
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+    steps:
+      - run: |
+          gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > notes.md
+          printf '\n\n' >> notes.md
+          gh release view "$TAG" --json body --jq .body >> notes.md
+          gh release edit "$TAG" --notes-file notes.md
