@@ -45,6 +45,9 @@ pub struct SessionConfig {
     /// Skill names the prompt points the session at.
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Wall-clock limit of a session, in seconds.
+    #[serde(default = "default_session_timeout")]
+    pub timeout: u64,
 }
 
 impl Default for SessionConfig {
@@ -53,8 +56,13 @@ impl Default for SessionConfig {
             permission_mode: default_permission_mode(),
             instructions: None,
             skills: Vec::new(),
+            timeout: default_session_timeout(),
         }
     }
+}
+
+fn default_session_timeout() -> u64 {
+    45 * 60
 }
 
 fn default_permission_mode() -> String {
