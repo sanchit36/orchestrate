@@ -1,6 +1,8 @@
 //! Tracker adapter: the one contract every tracker meets (ADR 0001).
 //! Ids are opaque strings; any translation stays inside the adapter.
 
+#[cfg(test)]
+pub(crate) mod contract;
 mod local_markdown;
 mod pausing;
 
