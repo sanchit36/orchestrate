@@ -12,7 +12,14 @@ const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
 
 /// Top-level keys of each file, besides `version`.
-const REPO_KEYS: &[&str] = &["tracker", "criteria_headings", "gates", "session"];
+const REPO_KEYS: &[&str] = &[
+    "tracker",
+    "criteria_headings",
+    "gates",
+    "session",
+    "seed_files",
+    "prepare",
+];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
 
 #[derive(Deserialize)]
@@ -24,6 +31,11 @@ pub struct RepoConfig {
     pub gates: Vec<Gate>,
     #[serde(default)]
     pub session: SessionConfig,
+    /// Local files (relative to the top level) copied into each fresh worktree.
+    #[serde(default)]
+    pub seed_files: Vec<PathBuf>,
+    /// A shell command run in each fresh worktree before its session.
+    pub prepare: Option<String>,
 }
 
 /// `[[gates]]`: a shell command run in the rebased ticket worktree; exit 0 passes.
