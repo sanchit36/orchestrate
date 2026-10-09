@@ -1,3 +1,4 @@
+mod clean;
 mod config;
 mod control;
 mod gate;
@@ -85,6 +86,24 @@ enum Cmd {
     },
     /// List this repo's runs, most recent first.
     Runs,
+    /// Remove a run's leftover worktrees and branches. Never touches the integration branch.
+    Clean {
+        /// A run id, unique id prefix or spec id; default the most recent run.
+        #[arg(long, conflicts_with = "all")]
+        run: Option<String>,
+        /// Also remove failed and stuck tickets' worktrees and branches.
+        #[arg(long)]
+        force: bool,
+        /// Clean every ended run of this repo.
+        #[arg(long)]
+        all: bool,
+        /// Also delete the run directory (state and logs). Implies `--force`.
+        #[arg(long)]
+        purge: bool,
+        /// Only remove the state of repos that are gone or moved, printing each.
+        #[arg(long, conflicts_with_all = ["run", "force", "all", "purge"])]
+        orphans: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -122,6 +141,21 @@ fn main() -> ExitCode {
             git_toplevel().and_then(|top| status::status(&top, run.as_deref(), ticket.as_deref()))
         }
         Cmd::Runs => git_toplevel().and_then(|top| status::runs(&top)),
+        Cmd::Clean {
+            run,
+            force,
+            all,
+            purge,
+            orphans,
+        } => git_toplevel().and_then(|top| {
+            let flags = clean::Flags {
+                force,
+                all,
+                purge,
+                orphans,
+            };
+            clean::clean(&top, run.as_deref(), &flags)
+        }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

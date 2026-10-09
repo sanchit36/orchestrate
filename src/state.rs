@@ -70,7 +70,7 @@ pub fn repo_dir(machine: &MachineConfig, top: &Path) -> Result<PathBuf> {
 }
 
 /// `state_dir`, else `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate`.
-fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
+pub fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
     if let Some(dir) = &machine.state_dir {
         return Ok(dir.clone());
     }
@@ -84,7 +84,7 @@ fn state_root(machine: &MachineConfig) -> Result<PathBuf> {
 }
 
 /// `<repo-folder>-<8-char hash of the canonical git common dir>`.
-fn repo_dir_name(top: &Path) -> Result<String> {
+pub fn repo_dir_name(top: &Path) -> Result<String> {
     let common = git(
         top,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],

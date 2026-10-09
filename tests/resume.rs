@@ -55,11 +55,15 @@ fn run_log(s: &Scratch) -> String {
     fs::read_to_string(run_dir(s).join("logs/run.log")).unwrap()
 }
 
-/// `git` in the run's integration worktree.
+/// `git` in the run's integration worktree, checked out again if run end removed it.
 fn integration_git(s: &Scratch, args: &[&str]) -> String {
+    let wt = worktrees(s).join("_integration");
+    if !wt.exists() {
+        s.git(&["worktree", "add", "-q", &wt.display().to_string(), "int"]);
+    }
     let out = std::process::Command::new("git")
         .args(args)
-        .current_dir(worktrees(s).join("_integration"))
+        .current_dir(wt)
         .env("HOME", &s.home)
         .output()
         .unwrap();
@@ -179,7 +183,7 @@ fn a_landed_ticket_not_yet_marked_finished_is_marked_before_anything_new_starts(
     let st = state(&s);
     assert_eq!(st["tickets"]["a"]["outcome"], "finished", "{st}");
     assert_eq!(st["tickets"]["b"]["outcome"], "finished", "{st}");
-    let a = fs::read_to_string(specs.join("a.md")).unwrap();
+    let a = s.git(&["show", "int:specs/auth/a.md"]);
     assert!(a.contains("Status: done"), "{a}");
     let log = run_log(&s);
     let marked = log.rfind("ticket a finished").expect(&log);
