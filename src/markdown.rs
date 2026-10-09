@@ -67,7 +67,6 @@ fn link_target(s: &str) -> &str {
 }
 
 pub struct Criterion {
-    #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
     pub text: String,
     #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
     pub met: bool,
@@ -77,14 +76,57 @@ pub struct Criterion {
 /// heading matches. Plain bullets, numbered lists and checkboxes elsewhere do not count.
 pub fn criteria<S: AsRef<str>>(body: &str, headings: &[S]) -> Option<Vec<Criterion>> {
     let lines = section(body, headings)?;
-    let parse = |l: &str| {
-        let (met, text) = match l.strip_prefix("- [")?.split_at_checked(2)? {
-            (" ]", text) => (false, text),
-            ("x]" | "X]", text) => (true, text),
-            _ => return None,
-        };
-        let text = text.strip_prefix(' ')?.trim().to_string();
-        Some(Criterion { text, met })
-    };
+    let parse = |l| checkbox(l).map(|(met, text)| Criterion { text, met });
     Some(lines.into_iter().filter_map(parse).collect())
+}
+
+/// `(met, text)` for a `- [ ] text` or `- [x] text` line.
+fn checkbox(line: &str) -> Option<(bool, String)> {
+    let (met, text) = match line.strip_prefix("- [")?.split_at_checked(2)? {
+        (" ]", text) => (false, text),
+        ("x]" | "X]", text) => (true, text),
+        _ => return None,
+    };
+    Some((met, text.strip_prefix(' ')?.trim().to_string()))
+}
+
+/// `body` with each unticked criterion whose text is in `texts` ticked, under the same
+/// heading rule as [`criteria`]; also returns the `texts` no criterion has any more.
+pub fn tick<S: AsRef<str>>(body: &str, headings: &[S], texts: &[String]) -> (String, Vec<String>) {
+    let mut found = Vec::new();
+    let (mut level, mut passed) = (None, false);
+    let mut out: Vec<String> = Vec::new();
+    for line in body.lines() {
+        if let Some((lv, name)) = heading(line) {
+            if level.is_some_and(|l| lv <= l) {
+                (level, passed) = (None, true);
+            } else if level.is_none() && !passed {
+                let named = headings
+                    .iter()
+                    .any(|h| h.as_ref().eq_ignore_ascii_case(name));
+                level = named.then_some(lv);
+            }
+        }
+        match checkbox(line).filter(|(_, t)| level.is_some() && texts.contains(t)) {
+            Some((met, text)) => {
+                found.push(text);
+                out.push(if met {
+                    line.into()
+                } else {
+                    line.replacen("- [ ]", "- [x]", 1)
+                });
+            }
+            None => out.push(line.into()),
+        }
+    }
+    let mut text = out.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    let missing = texts
+        .iter()
+        .filter(|t| !found.contains(t))
+        .cloned()
+        .collect();
+    (text, missing)
 }

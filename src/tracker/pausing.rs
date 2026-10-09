@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use super::{Blocker, Spec, Ticket, Tracker};
+use super::{Blocker, Spec, Ticket, Tracker, Unsupported};
 use crate::config::TrackerConfig;
 use crate::reporting::Events;
 
@@ -29,18 +29,25 @@ impl<'a> Pausing<'a> {
         }
     }
 
+    /// `f`'s answer after up to `ATTEMPTS` tries `retry_delay` apart. An unsupported
+    /// optional operation is not retried.
+    fn retry<T>(&self, f: impl Fn(&dyn Tracker) -> Result<T>) -> Result<T> {
+        let mut result = f(self.inner.as_ref());
+        for _ in 1..ATTEMPTS {
+            match &result {
+                Err(e) if !e.is::<Unsupported>() => {}
+                _ => break,
+            }
+            sleep(self.config.retry_delay);
+            result = f(self.inner.as_ref());
+        }
+        result
+    }
+
     /// `f`'s answer, however long the tracker takes to give one.
     fn call<T>(&self, op: &str, f: impl Fn(&dyn Tracker) -> Result<T>) -> Result<T> {
         let tracker = self.inner.as_ref();
-        let mut result = f(tracker);
-        for _ in 1..ATTEMPTS {
-            if result.is_ok() {
-                break;
-            }
-            sleep(self.config.retry_delay);
-            result = f(tracker);
-        }
-        let err = match result {
+        let err = match self.retry(&f) {
             Ok(v) => return Ok(v),
             Err(e) => e,
         };
@@ -90,6 +97,15 @@ impl Tracker for Pausing<'_> {
         self.call(&format!("mark {ticket} finished"), |t| {
             t.mark_finished(ticket)
         })
+    }
+
+    /// Optional writes are cosmetic: retried briefly, never paused on.
+    fn comment(&self, ticket: &str, markdown: &str) -> Result<()> {
+        self.retry(|t| t.comment(ticket, markdown))
+    }
+
+    fn tick(&self, ticket: &str, criteria: &[String]) -> Result<Vec<String>> {
+        self.retry(|t| t.tick(ticket, criteria))
     }
 }
 

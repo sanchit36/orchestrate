@@ -12,6 +12,7 @@ mod spec;
 mod state;
 mod tracker;
 mod worktree;
+mod writeback;
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
