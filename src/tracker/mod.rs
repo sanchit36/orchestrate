@@ -12,14 +12,12 @@ use crate::config::{RepoConfig, TrackerKind};
 pub struct Spec {
     pub id: String,
     pub title: String,
-    #[expect(dead_code, reason = "contract field, first read by run (#17, #18)")]
     pub body: String,
 }
 
 pub struct Ticket {
     pub id: String,
     pub title: String,
-    #[expect(dead_code, reason = "contract field, first read by run (#17, #18)")]
     pub body: String,
     pub finished: bool,
     pub ready: bool,
@@ -36,6 +34,8 @@ pub trait Tracker {
     fn get_spec(&self, spec: &str) -> Result<Spec>;
     fn list_tickets(&self, spec: &str) -> Result<Vec<Ticket>>;
     fn list_blockers(&self, ticket: &str) -> Result<Vec<Blocker>>;
+    /// Record that the ticket landed on the integration branch.
+    fn mark_finished(&self, ticket: &str) -> Result<()>;
 }
 
 /// The adapter the repo config names, rooted at the repo's top level.

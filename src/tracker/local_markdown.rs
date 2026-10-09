@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::{Blocker, Spec, Ticket, Tracker};
+use crate::git::git;
 
 const SPEC_FILE: &str = "spec.md";
 
@@ -93,6 +94,39 @@ impl Tracker for LocalMarkdown {
             });
         }
         Ok(blockers)
+    }
+
+    /// Rewrites the `Status:` line to `done` and commits the file where it lives.
+    /// `root` is inside the integration worktree during a run, never the user's checkout.
+    fn mark_finished(&self, ticket: &str) -> Result<()> {
+        let Some(path) = self.find_ticket(ticket)? else {
+            bail!("ticket `{ticket}` not found under {}", self.root.display());
+        };
+        let body = read(&path)?;
+        let mut found = false;
+        let lines: Vec<String> = body
+            .lines()
+            .map(|l| {
+                if !found && l.trim_start().starts_with("Status:") {
+                    found = true;
+                    "Status: done".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        if !found {
+            bail!("{} has no `Status:` line", path.display());
+        }
+        let mut text = lines.join("\n");
+        if body.ends_with('\n') {
+            text.push('\n');
+        }
+        fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        let file = path.to_string_lossy();
+        let message = format!("Mark {ticket} finished");
+        git(&self.root, &["commit", "-q", "-m", &message, "--", &file])?;
+        Ok(())
     }
 }
 

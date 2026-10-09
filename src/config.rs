@@ -12,12 +12,57 @@ const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
 
 /// Top-level keys of each file, besides `version`.
-const REPO_KEYS: &[&str] = &["tracker"];
+const REPO_KEYS: &[&str] = &["tracker", "gates", "session"];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
 
 #[derive(Deserialize)]
 pub struct RepoConfig {
     pub tracker: TrackerConfig,
+    #[serde(default)]
+    pub gates: Vec<Gate>,
+    #[serde(default)]
+    pub session: SessionConfig,
+}
+
+/// `[[gates]]`: a shell command run in the rebased ticket worktree; exit 0 passes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gate {
+    pub name: String,
+    pub run: String,
+}
+
+/// `[session]`: how sessions are launched and prompted.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionConfig {
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+    /// A repo file (relative to the top level) appended to the built-in prompt.
+    pub instructions: Option<PathBuf>,
+    /// Skill names the prompt points the session at.
+    #[serde(default)]
+    pub skills: Vec<String>,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            permission_mode: default_permission_mode(),
+            instructions: None,
+            skills: Vec::new(),
+        }
+    }
+}
+
+fn default_permission_mode() -> String {
+    "bypassPermissions".into()
+}
+
+/// The machine file; keys not parsed yet are only validated by name.
+#[derive(Deserialize, Default)]
+pub struct MachineConfig {
+    pub state_dir: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -41,7 +86,7 @@ fn default_ready() -> String {
 
 /// Load both config files for the repo whose git top level is `top`.
 /// The repo config is required; the machine config is optional.
-pub fn load(top: &Path) -> Result<RepoConfig> {
+pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
     let repo_path = top.join(REPO_CONFIG);
     let machine_path = machine_config_path()?;
     let Some(repo) = read(&repo_path)? else {
@@ -51,11 +96,19 @@ pub fn load(top: &Path) -> Result<RepoConfig> {
         );
     };
     validate(&repo_path, &repo, REPO_KEYS, MACHINE_KEYS, &machine_path)?;
-    if let Some(machine) = read(&machine_path)? {
-        validate(&machine_path, &machine, MACHINE_KEYS, REPO_KEYS, &repo_path)?;
-    }
-    repo.try_into()
-        .with_context(|| format!("{}", repo_path.display()))
+    let machine = match read(&machine_path)? {
+        Some(machine) => {
+            validate(&machine_path, &machine, MACHINE_KEYS, REPO_KEYS, &repo_path)?;
+            machine
+                .try_into()
+                .with_context(|| format!("{}", machine_path.display()))?
+        }
+        None => MachineConfig::default(),
+    };
+    let repo = repo
+        .try_into()
+        .with_context(|| format!("{}", repo_path.display()))?;
+    Ok((repo, machine))
 }
 
 fn machine_config_path() -> Result<PathBuf> {

@@ -1,7 +1,16 @@
 mod config;
+mod git;
+mod integrator;
 mod planner;
+mod prompt;
+mod report;
+mod reporting;
+mod run;
+mod session;
 mod spec;
+mod state;
 mod tracker;
+mod worktree;
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -24,12 +33,21 @@ enum Cmd {
         /// The spec id on the tracker.
         spec: String,
     },
+    /// Work a spec's frontier and land each ticket on the integration branch.
+    Run {
+        /// The spec id on the tracker.
+        spec: String,
+        /// The integration branch: created from `HEAD`, or reused if it exists.
+        #[arg(long)]
+        branch: String,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Plan { spec } => plan(&spec),
+        Cmd::Run { spec, branch } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -42,7 +60,7 @@ fn main() -> ExitCode {
 
 fn plan(spec_id: &str) -> Result<()> {
     let top = git_toplevel()?;
-    let config = config::load(&top)?;
+    let (config, _) = config::load(&top)?;
     let tracker = tracker::open(&config, &top);
     let reading = spec::read(tracker.as_ref(), spec_id)?;
     println!(
