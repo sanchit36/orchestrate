@@ -161,13 +161,17 @@ pub fn drive(
                     Err(e) => {
                         // Like a pause: nothing new starts; running sessions finish.
                         if !cycle {
-                            events.event(&format!("run paused: {e:#}"));
+                            let paused = format!("run paused: {e:#}");
+                            events.event(&paused);
+                            events.notify(&paused);
                             cycle = true;
                         }
                     }
                     Ok(plan) => {
                         if cycle {
-                            events.event("run recovered: blocking cycle resolved");
+                            let recovered = "run recovered: blocking cycle resolved";
+                            events.event(recovered);
+                            events.notify(recovered);
                             (cycle, wait) = (false, config.tracker.probe_backoff);
                         }
                         let free = planner::ceiling(max, &reading).saturating_sub(running);
