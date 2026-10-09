@@ -77,10 +77,7 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     repo.insert("criteria_headings".into(), headings.into());
 
     let gates = ask_gates(&mut ask, top, repo.get("gates"))?;
-    match gates.is_empty() {
-        true => _ = repo.remove("gates"),
-        false => _ = repo.insert("gates".into(), Value::Array(gates)),
-    }
+    repo.insert("gates".into(), Value::Array(gates));
 
     let seeds = match strings(&repo, "seed_files") {
         Some(seeds) => seeds,
@@ -152,8 +149,13 @@ fn ask_gates(ask: &mut Ask, top: &Path, current: Option<&Value>) -> Result<Vec<V
     }
     loop {
         let line = ask.line("Another gate as `name: command` (Enter to finish)")?;
-        if line.is_empty() {
-            return Ok(gates);
+        match (line.is_empty(), gates.is_empty()) {
+            (true, false) => return Ok(gates),
+            (true, true) => {
+                println!("At least one gate is required: `run` refuses to start without one.");
+                continue;
+            }
+            _ => {}
         }
         match line.split_once(':').map(|(n, r)| (n.trim(), r.trim())) {
             Some((name, run)) if !name.is_empty() && !run.is_empty() => {
