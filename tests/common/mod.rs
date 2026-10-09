@@ -57,6 +57,32 @@ impl Scratch {
         String::from_utf8(out.stdout).unwrap()
     }
 
+    /// A bare scratch remote `origin` beside the repo, holding the repo's `main`, whose
+    /// default branch is `main`. Read it back with `s.remote_refs()`.
+    pub fn remote(&self) {
+        let remote = self.remote_path();
+        self.git(&["init", "-q", "--bare", "-b", "main", &remote]);
+        self.git(&["remote", "add", "origin", &remote]);
+        self.git(&["push", "-q", "-u", "origin", "main"]);
+    }
+
+    fn remote_path(&self) -> String {
+        self.repo.with_file_name("remote.git").display().to_string()
+    }
+
+    /// Every ref of the scratch remote, with its sha and the remote's `HEAD`.
+    pub fn remote_refs(&self) -> String {
+        self.git(&["ls-remote", "--symref", &self.remote_path()])
+    }
+
+    /// Run git against the scratch remote's bare repo.
+    pub fn remote_git(&self, args: &[&str]) -> String {
+        let remote = self.remote_path();
+        let mut all = vec!["--git-dir", remote.as_str()];
+        all.extend_from_slice(args);
+        self.git(&all)
+    }
+
     /// Write a file under the repo, creating parent directories.
     pub fn write(&self, rel: &str, content: &str) {
         write(&self.repo.join(rel), content);

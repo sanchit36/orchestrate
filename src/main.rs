@@ -1,5 +1,6 @@
 mod config;
 mod control;
+mod gate;
 mod git;
 mod integrator;
 mod lock;
