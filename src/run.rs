@@ -9,13 +9,13 @@ use std::thread;
 
 use anyhow::{Result, bail};
 
-use crate::config::{self, MaxParallel, RepoConfig};
+use crate::config::{self, Gate, MachineConfig, MaxParallel, RepoConfig};
 use crate::git::{self, git};
 use crate::integrator::{self, Integration, Landing};
 use crate::report::Report;
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
-use crate::state::{self, RunDirs, State, Store, TicketState};
+use crate::state::{self, GateResult, RunDirs, State, Store, TicketState};
 use crate::tracker::{self, Msg, Pausing, Remote, Ticket, Tracker};
 use crate::writeback::{self, Written};
 use crate::{control, planner, prompt, session, worktree};
@@ -39,30 +39,67 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
     if protected.iter().any(|b| b == branch) {
         bail!("`{branch}` is a protected branch; pass another --branch");
     }
-    let headings = &config.criteria_headings;
     // Refuse a spec that cannot start before anything is created.
-    let start = spec::read(tracker::open(&config, top).as_ref(), spec_id, headings)?;
+    let start = spec::read(
+        tracker::open(&config, top).as_ref(),
+        spec_id,
+        &config.criteria_headings,
+    )?;
     planner::plan(&start)?;
 
     let dirs = RunDirs::create(&machine, top, spec_id)?;
+    let started = [
+        format!(
+            "run {} started: spec {spec_id}, integration branch {branch}",
+            dirs.id
+        ),
+        format!("max parallel: {}", planner::ceiling(max, &start)),
+    ];
+    let state = State::new(&dirs.id, spec_id, branch);
+    let fresh =
+        |_: &dyn Tracker, _: &writeback::Context, _: &Store, _: &mut Events| Ok(HashSet::new());
+    drive(top, &config, &machine, max, dirs, state, &started, fresh)
+}
+
+/// Run the loop of the run in `dirs`, from `state`, until nothing runs and nothing can
+/// start. `before` runs once the tracker is up, before anything starts, and returns the
+/// tickets not to work again.
+#[allow(clippy::too_many_arguments)]
+pub fn drive(
+    top: &Path,
+    config: &RepoConfig,
+    machine: &MachineConfig,
+    max: MaxParallel,
+    dirs: RunDirs,
+    state: State,
+    started: &[String],
+    before: impl FnOnce(
+        &dyn Tracker,
+        &writeback::Context,
+        &Store,
+        &mut Events,
+    ) -> Result<HashSet<String>>,
+) -> Result<()> {
+    let (spec_id, branch) = (&state.spec.clone(), &state.branch.clone());
+    let headings = &config.criteria_headings;
     let notify = machine.notifications != Some(false);
     let spec_slug = state::slug(spec_id);
     let mut events = Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug);
-    let store = Arc::new(Store::create(&dirs, State::new(&dirs.id, spec_id, branch))?);
+    let store = Arc::new(Store::create(&dirs, state)?);
     control::stop_on_signal(&dirs, Arc::clone(&store))?;
     let integration_wt = dirs.worktrees.join("_integration");
-    worktree::integration(top, &integration_wt, branch)?;
-    events.event(&format!(
-        "run {} started: spec {spec_id}, integration branch {branch}",
-        dirs.id
-    ));
-    events.event(&format!("max parallel: {}", planner::ceiling(max, &start)));
+    if !integration_wt.exists() {
+        worktree::integration(top, &integration_wt, branch)?;
+    }
+    for line in started {
+        events.event(line);
+    }
 
     // The tracker reads and writes back in the integration worktree, never the user's checkout.
     // A tracker failure pauses the run until the tracker answers again. Only this
     // (the dispatcher) thread calls it; workers reach it through a `Remote`.
     let tracker = Pausing::new(
-        tracker::open(&config, &integration_wt),
+        tracker::open(config, &integration_wt),
         &config.tracker,
         Events::open(&dirs.logs.join("run.log"))?.notifying(notify, &spec_slug),
         Box::new(|paused| store.update(|s| s.paused = paused)),
@@ -79,10 +116,9 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
         branch,
         private,
     };
+    let mut tried = before(&tracker, &cx, &store, &mut events)?;
     let landing = Mutex::new(());
-    let (config, dirs, into, cx, store_ref, landing) =
-        (&config, &dirs, &into, &cx, &*store, &landing);
-    let mut tried = HashSet::new();
+    let (dirs, into, cx, store_ref, landing) = (&dirs, &into, &cx, &*store, &landing);
     let mut running = 0;
     // Whether the run is paused on a blocking cycle, and the wait before its next re-read.
     let mut cycle = false;
@@ -297,6 +333,21 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// `slug`, else `slug-2`, `slug-3`, ...: the first name whose worktree and branch are
+    /// both free, so a restarted ticket keeps its old ones.
+    fn fresh(&self, slug: String) -> Result<String> {
+        let mut name = slug.clone();
+        for n in 2.. {
+            let branch = format!("refs/heads/orchestrate/{}/{name}", self.dirs.id);
+            let taken = git::succeeds(self.top, &["rev-parse", "--verify", "--quiet", &branch])?;
+            if !taken && !self.dirs.worktrees.join(&name).exists() {
+                break;
+            }
+            name = format!("{slug}-{n}");
+        }
+        Ok(name)
+    }
+
     /// Work one ticket and write its outcome back to the tracker.
     fn work(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
         let mut outcome = self.attempt(reading, ticket, events)?;
@@ -312,7 +363,7 @@ impl Run<'_> {
 
     /// Work one ticket from worktree to landing; returns its outcome.
     fn attempt(&self, reading: &Reading, ticket: &Ticket, events: &mut Events) -> Result<Outcome> {
-        let slug = state::slug(&ticket.id);
+        let slug = self.fresh(state::slug(&ticket.id))?;
         let wt = self.dirs.worktrees.join(&slug);
         let branch = format!("orchestrate/{}/{slug}", self.dirs.id);
         worktree::create(self.top, &wt, &branch, self.into.branch)?;
@@ -375,20 +426,14 @@ impl Run<'_> {
                     &message,
                     &mut results,
                 )?;
-                // Each gate as it went, for the landing comment; no result means skipped.
-                gates = (self.config.gates.iter())
-                    .map(|g| match results.iter().find(|r| r.name == g.name) {
-                        Some(r) if r.code == 0 => format!("{}: passed", g.name),
-                        Some(r) => format!("{}: exited {}", g.name, r.code),
-                        None => format!("{}: skipped", g.name),
-                    })
-                    .collect();
+                gates = gate_lines(&self.config.gates, &results);
                 self.ticket(&ticket.id, |t| t.gates = results)?;
                 landing
             }
         };
         match landing {
             Landing::Merged(sha) => {
+                self.ticket(&ticket.id, |t| t.merged = Some(sha.clone()))?;
                 let entry = reading.tickets.iter().find(|e| e.ticket.id == ticket.id);
                 let criteria: Vec<String> = entry
                     .iter()
@@ -414,6 +459,18 @@ impl Run<'_> {
             }
         }
     }
+}
+
+/// Each gate as its landing ran it, for the landing comment; no result means skipped.
+pub fn gate_lines(gates: &[Gate], results: &[GateResult]) -> Vec<String> {
+    gates
+        .iter()
+        .map(|g| match results.iter().find(|r| r.name == g.name) {
+            Some(r) if r.code == 0 => format!("{}: passed", g.name),
+            Some(r) => format!("{}: exited {}", g.name, r.code),
+            None => format!("{}: skipped", g.name),
+        })
+        .collect()
 }
 
 /// A stuck session: its notes are the reason; unmet criteria are kept beside them.
