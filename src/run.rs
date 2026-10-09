@@ -299,6 +299,8 @@ impl Run<'_> {
         let mut outcome = self.attempt(reading, ticket, events)?;
         if outcome.kind != "finished" {
             let reason = outcome.reason.as_deref();
+            // A tracker write may commit in `_integration`; never during another merge.
+            let _landing = self.landing.lock().unwrap_or_else(|e| e.into_inner());
             outcome.written =
                 writeback::outcome(self.tracker, self.cx, &ticket.id, outcome.kind, reason);
         }
@@ -364,6 +366,7 @@ impl Run<'_> {
                     &wt,
                     &branch,
                     &self.config.gates,
+                    &self.config.session,
                     &self.dirs.logs,
                     &slug,
                     &message,
