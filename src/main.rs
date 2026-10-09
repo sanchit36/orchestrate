@@ -190,3 +190,22 @@ fn git_toplevel() -> Result<PathBuf> {
     }
     Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim_end()))
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn every_command_and_argument_has_help() {
+        let cli = super::Cli::command();
+        assert!(cli.get_about().is_some());
+        for cmd in cli.get_subcommands() {
+            let name = cmd.get_name();
+            assert!(cmd.get_about().is_some(), "`{name}` has no description");
+            for arg in cmd.get_arguments() {
+                let id = arg.get_id();
+                assert!(arg.get_help().is_some(), "`{name} {id}` has no help");
+            }
+        }
+    }
+}

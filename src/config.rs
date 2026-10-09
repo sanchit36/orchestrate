@@ -353,3 +353,34 @@ fn validate(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOC: &str = include_str!("../docs/configuration.md");
+
+    #[test]
+    fn configuration_doc_names_every_top_level_key() {
+        for key in REPO_KEYS.iter().chain(MACHINE_KEYS) {
+            assert!(DOC.contains(&format!("`{key}`")), "`{key}` is undocumented");
+        }
+    }
+
+    /// Every ```toml example is a whole config file the loader accepts.
+    #[test]
+    fn configuration_doc_examples_load() {
+        let blocks: Vec<_> = DOC.split("```toml\n").skip(1).collect();
+        assert!(blocks.len() >= 2, "a repo and a machine example");
+        for block in blocks {
+            let table: toml::Table = block.split("```").next().unwrap().parse().unwrap();
+            if table.contains_key("tracker") {
+                repo_config(Path::new(REPO_CONFIG), table).unwrap();
+            } else {
+                let (here, there) = (Path::new("machine"), Path::new("repo"));
+                validate(here, &table, MACHINE_KEYS, REPO_KEYS, there).unwrap();
+                let _: MachineConfig = table.try_into().unwrap();
+            }
+        }
+    }
+}
