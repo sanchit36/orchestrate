@@ -179,7 +179,7 @@ impl Run<'_> {
         let prepare_log = self.dirs.logs.join(format!("{slug}.prepare.log"));
         if let Some(reason) = worktree::prepare(self.top, &wt, self.config, &prepare_log)? {
             events.event(&format!("ticket {} failed: {reason}", ticket.id));
-            return Ok("failed");
+            return Ok(Outcome::because("failed", reason));
         }
 
         let session = &self.config.session;
