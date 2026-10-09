@@ -10,6 +10,7 @@ mod run;
 mod session;
 mod spec;
 mod state;
+mod status;
 mod tracker;
 mod worktree;
 
@@ -42,6 +43,16 @@ enum Cmd {
         #[arg(long)]
         branch: String,
     },
+    /// Show where a run is, or diagnose one of its tickets. Reads run state only.
+    Status {
+        /// A ticket id: show its criteria, notes, gates, worktree and logs.
+        ticket: Option<String>,
+        /// A run id, unique id prefix or spec id; default the most recent run.
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// List this repo's runs, most recent first.
+    Runs,
 }
 
 fn main() -> ExitCode {
@@ -49,6 +60,10 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Cmd::Plan { spec } => plan(&spec),
         Cmd::Run { spec, branch } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch)),
+        Cmd::Status { ticket, run } => {
+            git_toplevel().and_then(|top| status::status(&top, run.as_deref(), ticket.as_deref()))
+        }
+        Cmd::Runs => git_toplevel().and_then(|top| status::runs(&top)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

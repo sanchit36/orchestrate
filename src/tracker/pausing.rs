@@ -14,18 +14,28 @@ use crate::reporting::Events;
 
 const ATTEMPTS: u32 = 3;
 
+/// Told the pause reason when the run pauses, and `None` when it recovers.
+pub type OnPause<'a> = Box<dyn Fn(Option<String>) -> Result<()> + 'a>;
+
 pub struct Pausing<'a> {
     inner: Box<dyn Tracker>,
     config: &'a TrackerConfig,
     events: RefCell<Events>,
+    on_pause: OnPause<'a>,
 }
 
 impl<'a> Pausing<'a> {
-    pub fn new(inner: Box<dyn Tracker>, config: &'a TrackerConfig, events: Events) -> Self {
+    pub fn new(
+        inner: Box<dyn Tracker>,
+        config: &'a TrackerConfig,
+        events: Events,
+        on_pause: OnPause<'a>,
+    ) -> Self {
         Self {
             inner,
             config,
             events: RefCell::new(events),
+            on_pause,
         }
     }
 
@@ -46,15 +56,17 @@ impl<'a> Pausing<'a> {
         };
         let mut events = self.events.borrow_mut();
         let mut wait = self.config.probe_backoff;
+        let reason = format!("{op} failed: {}", one_line(&err));
+        (self.on_pause)(Some(reason.clone()))?;
         events.event(&format!(
-            "run paused: {op} failed: {}; next probe in {}",
-            one_line(&err),
+            "run paused: {reason}; next probe in {}",
             human(wait)
         ));
         loop {
             sleep(wait);
             match f(tracker) {
                 Ok(v) => {
+                    (self.on_pause)(None)?;
                     events.event(&format!("run recovered: {op} succeeded"));
                     return Ok(v);
                 }

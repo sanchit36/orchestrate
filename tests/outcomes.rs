@@ -159,12 +159,12 @@ fn a_failed_ticket_keeps_its_worktree_and_branch_skips_dependents_and_others_con
 #[test]
 fn a_session_past_its_timeout_has_its_process_group_killed_and_times_out() {
     let s = Scratch::new();
-    spec(&s, "timeout = \"1s\"\n");
+    spec(&s, "timeout = \"3s\"\n");
     let pid = s.repo.parent().unwrap().join("grandchild.pid");
     claude(
         &s,
         &format!(
-            "a) {COMMIT}; sleep 30 & echo $! > '{}'; wait;;",
+            "a) sleep 30 & echo $! > '{}'; {COMMIT}; wait;;",
             pid.display()
         ),
     );
@@ -176,7 +176,7 @@ fn a_session_past_its_timeout_has_its_process_group_killed_and_times_out() {
     let st = state(&s);
     assert_eq!(st["tickets"]["a"]["outcome"], "timeout");
     assert!(
-        out.contains("ticket a timeout: no exit after 1s\n"),
+        out.contains("ticket a timeout: no exit after 3s\n"),
         "{out}"
     );
     assert!(out.contains("1 finished, 1 failed"), "{out}");
