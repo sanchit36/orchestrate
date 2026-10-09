@@ -38,7 +38,8 @@ impl Events {
         let line = format!("{} {msg}", jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S"));
         println!("{line}");
         // A failed log write must not stop the run; the line is already on screen.
-        let _ = writeln!(self.log, "{line}");
+        // One append per line, so lines from several threads' handles never interleave.
+        let _ = self.log.write_all(format!("{line}\n").as_bytes());
     }
 
     /// Show `body` as a desktop notification. Where none can be shown, the first

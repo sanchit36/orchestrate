@@ -66,6 +66,7 @@ fn link_target(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+#[derive(Clone)]
 pub struct Criterion {
     pub text: String,
     #[cfg_attr(

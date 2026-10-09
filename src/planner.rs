@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
 
+use crate::config::MaxParallel;
 use crate::spec::{Entry, Reading};
 use crate::tracker::Ticket;
 
@@ -74,6 +75,52 @@ pub fn plan(reading: &Reading) -> Result<Plan<'_>> {
         }
     }
     Ok(plan)
+}
+
+/// How many sessions may run at once: the fixed number, or for `auto`
+/// `min(graph width, max(2, min(6, cores / 2)))`. Assumes no cycle among open tickets.
+pub fn ceiling(max: MaxParallel, reading: &Reading) -> usize {
+    if let Some(n) = max.0 {
+        return n.get();
+    }
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    width(reading).min(2.max(6.min(cores / 2)))
+}
+
+/// The most open tickets on one level, a ticket's level being the length of the
+/// longest chain of open blockers under it.
+fn width(reading: &Reading) -> usize {
+    let open: HashMap<&str, &Entry> = reading
+        .tickets
+        .iter()
+        .filter(|e| !e.ticket.finished)
+        .map(|e| (e.ticket.id.as_str(), e))
+        .collect();
+    let mut levels = HashMap::new();
+    let mut per_level: HashMap<usize, usize> = HashMap::new();
+    for e in open.values() {
+        *per_level.entry(level(e, &open, &mut levels)).or_default() += 1;
+    }
+    per_level.into_values().max().unwrap_or(0)
+}
+
+fn level<'a>(
+    e: &'a Entry,
+    open: &HashMap<&str, &'a Entry>,
+    levels: &mut HashMap<&'a str, usize>,
+) -> usize {
+    if let Some(l) = levels.get(e.ticket.id.as_str()) {
+        return *l;
+    }
+    let l = e
+        .blockers
+        .iter()
+        .filter_map(|b| open.get(b.id.as_str()))
+        .map(|b| level(b, open, levels) + 1)
+        .max()
+        .unwrap_or(0);
+    levels.insert(&e.ticket.id, l);
+    l
 }
 
 /// The first cycle of open tickets blocked by each other, in tracker order.
