@@ -4,9 +4,10 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
@@ -94,6 +95,14 @@ pub struct TrackerConfig {
     pub location: String,
     #[serde(default = "default_ready")]
     pub ready: String,
+    /// Wait between the quick retries of a failed tracker operation.
+    #[serde(default = "default_retry_delay", deserialize_with = "duration")]
+    pub retry_delay: Duration,
+    /// First wait between probes of a paused run; it doubles up to `probe_backoff_max`.
+    #[serde(default = "default_probe_backoff", deserialize_with = "duration")]
+    pub probe_backoff: Duration,
+    #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
+    pub probe_backoff_max: Duration,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +113,25 @@ pub enum TrackerKind {
 
 fn default_ready() -> String {
     "ready-for-agent".into()
+}
+
+fn default_retry_delay() -> Duration {
+    Duration::from_secs(2)
+}
+
+fn default_probe_backoff() -> Duration {
+    Duration::from_secs(60)
+}
+
+fn default_probe_backoff_max() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+/// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    let text = String::deserialize(d)?;
+    let parsed: jiff::SignedDuration = text.parse().map_err(serde::de::Error::custom)?;
+    Duration::try_from(parsed).map_err(serde::de::Error::custom)
 }
 
 fn default_criteria_headings() -> Vec<String> {

@@ -14,7 +14,7 @@ use crate::report::Report;
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, RunDirs, State, TicketState};
-use crate::tracker::{self, Ticket, Tracker};
+use crate::tracker::{self, Pausing, Ticket, Tracker};
 use crate::{planner, prompt, session, worktree};
 
 pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
@@ -43,7 +43,12 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     ));
 
     // The tracker reads and writes back in the integration worktree, never the user's checkout.
-    let tracker = tracker::open(&config, &integration_wt);
+    // A tracker failure pauses the run until the tracker answers again.
+    let tracker = Pausing::new(
+        tracker::open(&config, &integration_wt),
+        &config.tracker,
+        Events::open(&dirs.logs.join("run.log"))?,
+    );
     let into = Integration {
         worktree: &integration_wt,
         branch,
@@ -53,11 +58,11 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
         config: &config,
         dirs: &dirs,
         into: &into,
-        tracker: tracker.as_ref(),
+        tracker: &tracker,
     };
     let mut tried = HashSet::new();
     loop {
-        let reading = spec::reread(tracker.as_ref(), spec_id, headings)?;
+        let reading = spec::reread(&tracker, spec_id, headings)?;
         for t in reading.tickets.iter().map(|e| &e.ticket) {
             let seen = state.tickets.entry(t.id.clone()).or_insert(TicketState {
                 title: t.title.clone(),
