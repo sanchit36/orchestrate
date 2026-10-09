@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -209,6 +210,18 @@ printf '{{"status":"done","acceptance_criteria":[{{"text":"it works","met":true,
     /// Run `orchestrate` from `cwd` with the scratch home, fakes first on `PATH`, and no stdin.
     pub fn run_in(&self, cwd: &Path, args: &[&str]) -> Run {
         Run(self.command(cwd, args).output().unwrap())
+    }
+
+    /// Run `orchestrate` from the repo root with `input` on stdin.
+    pub fn run_with_input(&self, args: &[&str], input: &str) -> Run {
+        let mut cmd = self.command(&self.repo, args);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        // A process that stops reading early closes the pipe; that is its own business.
+        let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+        Run(child.wait_with_output().unwrap())
     }
 
     /// Start `orchestrate` from the repo root in the background, output piped.
