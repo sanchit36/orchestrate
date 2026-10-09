@@ -113,3 +113,14 @@ fn the_prompt_carries_no_dependency_advice() {
         assert!(!prompt.contains(word), "{word} in {prompt}");
     }
 }
+
+#[test]
+fn seeded_and_prepared_files_left_untracked_do_not_stop_the_ticket_landing() {
+    let s = one_ticket("seed_files = [\".env\"]\nprepare = \"touch deps-installed\"");
+    s.write(".env", "SECRET=1\n");
+    s.claude_lands();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(out.contains("ticket a finished"), "{out}");
+}

@@ -46,6 +46,12 @@ pub fn origin_default_branch(dir: &Path) -> Result<Option<String>> {
         .map(String::from))
 }
 
+/// Each entry of `git status` in `dir`: tracked changes and untracked, not ignored, files.
+pub fn changes(dir: &Path) -> Result<Vec<String>> {
+    let out = git(dir, &["status", "--porcelain", "-z", "--untracked-files=all"])?;
+    Ok(out.split_terminator('\0').map(String::from).collect())
+}
+
 /// Whether `git <args>` exits 0 in `dir`.
 pub fn succeeds(dir: &Path, args: &[&str]) -> Result<bool> {
     let out = Command::new("git")

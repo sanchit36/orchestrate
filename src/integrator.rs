@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use crate::config::{Gate, SessionConfig};
 use crate::gate;
-use crate::git::{git, succeeds};
+use crate::git::{self, git, succeeds};
 use crate::prompt;
 use crate::session;
 use crate::state::GateResult;
@@ -29,11 +29,14 @@ pub enum Landing {
 /// Land the ticket branch checked out at `ticket_wt`. Gate output goes to
 /// `<logs>/<slug>.gate-<name>.log`; each gate run's exit code goes to `results`.
 /// A rebase conflict is handed to a session (output in `<logs>/<slug>.conflict.log`).
+/// Gates check exactly the commit that merges, so a worktree holding changes beyond
+/// `baseline` (its `git status` before the session) fails the ticket.
 #[expect(clippy::too_many_arguments)]
 pub fn land(
     into: &Integration,
     ticket_wt: &Path,
     ticket_branch: &str,
+    baseline: &[String],
     gates: &[Gate],
     session: &SessionConfig,
     logs: &Path,
@@ -41,9 +44,16 @@ pub fn land(
     message: &str,
     results: &mut Vec<GateResult>,
 ) -> Result<Landing> {
+    if let Some(reason) = uncommitted(ticket_wt, baseline)? {
+        return Ok(Landing::Failed(reason));
+    }
     if !succeeds(ticket_wt, &["rebase", "-q", into.branch])? {
         let log = logs.join(format!("{slug}.conflict.log"));
-        if let Some(reason) = resolve(into, ticket_wt, ticket_branch, session, &log)? {
+        let failed = match resolve(into, ticket_wt, ticket_branch, session, &log)? {
+            None => uncommitted(ticket_wt, baseline)?,
+            failed => failed,
+        };
+        if let Some(reason) = failed {
             return Ok(Landing::Failed(reason));
         }
     }
@@ -60,6 +70,17 @@ pub fn land(
         &["merge", "-q", "--no-ff", "-m", message, ticket_branch],
     )?;
     Ok(Landing::Merged(git(into.worktree, &["rev-parse", "HEAD"])?))
+}
+
+/// Why `wt` is not exactly its `HEAD` plus `baseline`, if it is not.
+fn uncommitted(wt: &Path, baseline: &[String]) -> Result<Option<String>> {
+    let left: Vec<String> = (git::changes(wt)?.into_iter())
+        .filter(|c| !baseline.contains(c))
+        // An entry is `XY <path>`.
+        .map(|c| c.get(3..).unwrap_or_default().to_string())
+        .collect();
+    let reason = format!("uncommitted changes in the worktree: {}", left.join(", "));
+    Ok((!left.is_empty()).then_some(reason))
 }
 
 /// Run a conflict-resolution session on the stopped rebase; `Some(reason)` when it

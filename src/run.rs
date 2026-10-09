@@ -375,6 +375,8 @@ impl Run<'_> {
             events.event(&format!("ticket {} failed: {reason}", ticket.id));
             return Ok(Outcome::because("failed", reason));
         }
+        // Seeded and prepared files are not the session's work, so landing allows them.
+        let baseline = git::changes(&wt)?;
 
         let session = &self.config.session;
         let prompt = prompt::render(session, self.top, &reading.spec.body, &ticket.body, &branch)?;
@@ -420,6 +422,7 @@ impl Run<'_> {
                     self.into,
                     &wt,
                     &branch,
+                    &baseline,
                     &self.config.gates,
                     &self.config.session,
                     &self.dirs.logs,

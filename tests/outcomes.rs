@@ -258,3 +258,29 @@ fn alive(pid: &str) -> bool {
     }
     true
 }
+
+#[test]
+fn changes_the_session_left_uncommitted_fail_the_ticket_before_any_gate_or_conflict_session() {
+    let done = report("done", true, "");
+    for (arm, left) in [
+        (format!("a) {COMMIT}; echo x > extra.txt; {done};;"), "extra.txt"),
+        (format!("a) {COMMIT}; echo more >> a.txt; {done};;"), "a.txt"),
+    ] {
+        let s = Scratch::new();
+        spec(&s, "");
+        claude(&s, &arm);
+
+        let out = s
+            .run(&["run", "auth", "--branch", "int", "--max-parallel", "1"])
+            .ok();
+
+        let st = state(&s);
+        assert_eq!(st["tickets"]["a"]["outcome"], "failed", "{arm}: {st}");
+        let reason = format!("uncommitted changes in the worktree: {left}");
+        assert_eq!(st["tickets"]["a"]["reason"], reason.as_str(), "{arm}");
+        assert!(out.contains(&format!("ticket a failed: {reason}")), "{out}");
+        assert_eq!(s.calls("gate").len(), 1, "{arm}: only c is gated");
+        assert_eq!(s.calls("claude").len(), 2, "{arm}: no conflict session");
+        assert!(!merged(&s).contains("Add schema"), "{arm}");
+    }
+}
