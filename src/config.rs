@@ -18,6 +18,8 @@ const REPO_KEYS: &[&str] = &[
     "criteria_headings",
     "gates",
     "session",
+    "seed_files",
+    "prepare",
     "protected_branches",
 ];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
@@ -31,6 +33,11 @@ pub struct RepoConfig {
     pub gates: Vec<Gate>,
     #[serde(default)]
     pub session: SessionConfig,
+    /// Local files (relative to the top level) copied into each fresh worktree.
+    #[serde(default)]
+    pub seed_files: Vec<PathBuf>,
+    /// A shell command run in each fresh worktree before its session.
+    pub prepare: Option<String>,
     /// Branches a run never writes; `None` means the remote's default branch.
     pub protected_branches: Option<Vec<String>>,
 }
@@ -60,13 +67,6 @@ fn default_gate_timeout() -> Duration {
     Duration::from_secs(20 * 60)
 }
 
-/// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
-fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-    let text = String::deserialize(d)?;
-    let parsed: jiff::SignedDuration = text.parse().map_err(serde::de::Error::custom)?;
-    Duration::try_from(parsed).map_err(serde::de::Error::custom)
-}
-
 /// `[session]`: how sessions are launched and prompted.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,6 +78,9 @@ pub struct SessionConfig {
     /// Skill names the prompt points the session at.
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Wall-clock limit of a session.
+    #[serde(default = "default_session_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
 }
 
 impl Default for SessionConfig {
@@ -86,8 +89,13 @@ impl Default for SessionConfig {
             permission_mode: default_permission_mode(),
             instructions: None,
             skills: Vec::new(),
+            timeout: default_session_timeout(),
         }
     }
+}
+
+fn default_session_timeout() -> Duration {
+    Duration::from_secs(45 * 60)
 }
 
 fn default_permission_mode() -> String {
@@ -107,6 +115,14 @@ pub struct TrackerConfig {
     pub location: String,
     #[serde(default = "default_ready")]
     pub ready: String,
+    /// Wait between the quick retries of a failed tracker operation.
+    #[serde(default = "default_retry_delay", deserialize_with = "duration")]
+    pub retry_delay: Duration,
+    /// First wait between probes of a paused run; it doubles up to `probe_backoff_max`.
+    #[serde(default = "default_probe_backoff", deserialize_with = "duration")]
+    pub probe_backoff: Duration,
+    #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
+    pub probe_backoff_max: Duration,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +133,25 @@ pub enum TrackerKind {
 
 fn default_ready() -> String {
     "ready-for-agent".into()
+}
+
+fn default_retry_delay() -> Duration {
+    Duration::from_secs(2)
+}
+
+fn default_probe_backoff() -> Duration {
+    Duration::from_secs(60)
+}
+
+fn default_probe_backoff_max() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+/// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    let text = String::deserialize(d)?;
+    let parsed: jiff::SignedDuration = text.parse().map_err(serde::de::Error::custom)?;
+    Duration::try_from(parsed).map_err(serde::de::Error::custom)
 }
 
 fn default_criteria_headings() -> Vec<String> {

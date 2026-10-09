@@ -17,6 +17,7 @@ pub enum Status {
 
 #[derive(Deserialize)]
 pub struct Criterion {
+    pub text: String,
     pub met: bool,
 }
 
@@ -24,6 +25,8 @@ pub struct Criterion {
 pub struct Report {
     pub status: Status,
     pub acceptance_criteria: Vec<Criterion>,
+    #[serde(default)]
+    pub notes: String,
 }
 
 impl Report {
@@ -34,8 +37,14 @@ impl Report {
         serde_json::from_str(&text).context("malformed report")
     }
 
+    /// The texts of the criteria reported unmet.
+    pub fn unmet(&self) -> Vec<String> {
+        let unmet = self.acceptance_criteria.iter().filter(|c| !c.met);
+        unmet.map(|c| c.text.clone()).collect()
+    }
+
     /// `done` with every criterion met.
     pub fn is_done(&self) -> bool {
-        matches!(self.status, Status::Done) && self.acceptance_criteria.iter().all(|c| c.met)
+        matches!(self.status, Status::Done) && self.unmet().is_empty()
     }
 }
