@@ -48,6 +48,7 @@ Run everything from inside your repo.
    ```
 
    Setup detects your tracker, proposes gates from your build files, and asks you to confirm each answer (Enter takes the default in brackets).
+   It keeps asking for a gate until you have at least one.
    It checks the tracker on one real spec, then writes `.orchestrate/config.toml`.
    Commit that file.
 
