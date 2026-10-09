@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use crate::markdown::{self, Criterion};
 use crate::tracker::{Blocker, Spec, Ticket, Tracker};
 
+#[derive(Clone)]
 pub struct Reading {
     pub spec: Spec,
     /// Tickets in tracker order.
@@ -14,6 +15,7 @@ pub struct Reading {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct Entry {
     pub ticket: Ticket,
     pub blockers: Vec<Blocker>,

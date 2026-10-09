@@ -66,6 +66,7 @@ fn link_target(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+#[derive(Clone)]
 pub struct Criterion {
     #[expect(dead_code, reason = "read by the run report and ticking (#18)")]
     pub text: String,

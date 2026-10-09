@@ -3,7 +3,9 @@
 
 use std::fs;
 use std::io::ErrorKind;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -86,6 +88,37 @@ fn default_permission_mode() -> String {
 #[derive(Deserialize, Default)]
 pub struct MachineConfig {
     pub state_dir: Option<PathBuf>,
+    /// The default for `--max-parallel`.
+    #[serde(default)]
+    pub max_parallel: MaxParallel,
+}
+
+/// The session ceiling: `auto` (derived by the planner) or a fixed number.
+#[derive(Clone, Copy, Default)]
+pub struct MaxParallel(pub Option<NonZeroUsize>);
+
+impl FromStr for MaxParallel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        if s == "auto" {
+            return Ok(Self(None));
+        }
+        let n = s
+            .parse()
+            .map_err(|_| "expected `auto` or a number above 0")?;
+        Ok(Self(Some(n)))
+    }
+}
+
+impl<'de> Deserialize<'de> for MaxParallel {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = match toml::Value::deserialize(d)? {
+            toml::Value::String(s) => s,
+            other => other.to_string(),
+        };
+        text.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Deserialize)]

@@ -41,6 +41,10 @@ enum Cmd {
         /// The integration branch: created from `HEAD`, or reused if it exists.
         #[arg(long)]
         branch: String,
+        /// Sessions at once: `auto` (from the graph width and cores) or a number.
+        /// Defaults to the machine config's `max_parallel`, else `auto`.
+        #[arg(long)]
+        max_parallel: Option<config::MaxParallel>,
     },
 }
 
@@ -48,7 +52,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Plan { spec } => plan(&spec),
-        Cmd::Run { spec, branch } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch)),
+        Cmd::Run {
+            spec,
+            branch,
+            max_parallel,
+        } => git_toplevel().and_then(|top| run::run(&top, &spec, &branch, max_parallel)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
