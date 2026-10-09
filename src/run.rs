@@ -259,7 +259,10 @@ pub fn drive(
         state.status = "ended".into();
         let count = |o: &str| state.tickets.values().filter(|t| t.outcome == o).count();
         let counts = (
-            count("finished"),
+            // Landed by this run, not finished before it.
+            (state.tickets.values())
+                .filter(|t| t.merged.is_some())
+                .count(),
             count("failed") + count("timeout"),
             count("stuck"),
         );

@@ -253,6 +253,20 @@ fn landed_ticket_worktrees_branches_and_the_integration_worktree_are_removed() {
 }
 
 #[test]
+fn the_run_end_counts_only_tickets_the_run_finished() {
+    let s = chain();
+    s.ticket("auth", "e", "Done before", "done", &[]);
+    s.commit_all();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    assert!(
+        out.contains("ended: 2 finished, 0 failed, 0 stuck"),
+        "{out}"
+    );
+}
+
+#[test]
 fn a_run_whose_integration_worktree_cannot_be_removed_still_ends_with_its_summary() {
     let s = Scratch::new();
     // A locked worktree refuses `git worktree remove --force`.
