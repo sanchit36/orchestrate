@@ -21,8 +21,13 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     if config.gates.is_empty() {
         bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
     }
-    // Fail on a missing spec before anything is created.
-    spec::read(tracker::open(&config, top).as_ref(), spec_id)?;
+    let headings = &config.criteria_headings;
+    // Refuse a spec that cannot start before anything is created.
+    planner::plan(&spec::read(
+        tracker::open(&config, top).as_ref(),
+        spec_id,
+        headings,
+    )?)?;
 
     let dirs = RunDirs::create(&machine, top, spec_id)?;
     let mut events = Events::open(&dirs.logs.join("run.log"))?;
@@ -50,15 +55,16 @@ pub fn run(top: &Path, spec_id: &str, branch: &str) -> Result<()> {
     };
     let mut tried = HashSet::new();
     loop {
-        let reading = spec::read(tracker.as_ref(), spec_id)?;
-        for (t, _) in &reading.tickets {
+        let reading = spec::reread(tracker.as_ref(), spec_id, headings)?;
+        for t in reading.tickets.iter().map(|e| &e.ticket) {
             let seen = state.tickets.entry(t.id.clone()).or_insert(TicketState {
                 title: t.title.clone(),
                 outcome: if t.finished { "finished" } else { "pending" }.into(),
             });
             seen.title = t.title.clone();
         }
-        let next = planner::frontier(&reading)
+        let next = planner::plan(&reading)?
+            .frontier
             .into_iter()
             .find(|t| !tried.contains(&t.id));
         let Some(ticket) = next else { break };

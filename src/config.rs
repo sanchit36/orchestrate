@@ -12,12 +12,14 @@ const REPO_CONFIG: &str = ".orchestrate/config.toml";
 const VERSION: i64 = 1;
 
 /// Top-level keys of each file, besides `version`.
-const REPO_KEYS: &[&str] = &["tracker", "gates", "session"];
+const REPO_KEYS: &[&str] = &["tracker", "criteria_headings", "gates", "session"];
 const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
 
 #[derive(Deserialize)]
 pub struct RepoConfig {
     pub tracker: TrackerConfig,
+    #[serde(default = "default_criteria_headings")]
+    pub criteria_headings: Vec<String>,
     #[serde(default)]
     pub gates: Vec<Gate>,
     #[serde(default)]
@@ -82,6 +84,10 @@ pub enum TrackerKind {
 
 fn default_ready() -> String {
     "ready-for-agent".into()
+}
+
+fn default_criteria_headings() -> Vec<String> {
+    vec!["Acceptance criteria".into(), "Acceptance".into()]
 }
 
 /// Load both config files for the repo whose git top level is `top`.

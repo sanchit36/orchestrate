@@ -1,8 +1,8 @@
 //! Local markdown tracker. Layout under the configured `location`:
 //! `<spec>/spec.md` is the spec, every other `<spec>/<ticket>.md` is a ticket
 //! (id = file stem, tracker order = file name order). A ticket's `Status:` line
-//! decides `ready` (equal to the ready marker) and `finished` (`done`); its
-//! `Blocked by:` line lists blocker ids.
+//! decides `ready` (equal to the ready marker) and `finished` (`done`). There are
+//! no native links, so blockers are only the body forms, as ids or links to ticket files.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 
 use super::{Blocker, Spec, Ticket, Tracker};
 use crate::git::git;
+use crate::markdown;
 
 const SPEC_FILE: &str = "spec.md";
 
@@ -62,14 +63,14 @@ impl Tracker for LocalMarkdown {
                 continue;
             }
             let id = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let body = read(&path)?;
-            let status = line_value(&body, "Status:").unwrap_or_default();
+            let text = read(&path)?;
+            let status = line_value(&text, "Status:").unwrap_or_default();
             tickets.push(Ticket {
-                title: title(&body).unwrap_or(&id).to_string(),
+                title: title(&text).unwrap_or(&id).to_string(),
                 finished: status == "done",
                 ready: status == self.ready,
                 id,
-                body,
+                body: ticket_body(&text),
             });
         }
         Ok(tickets)
@@ -79,19 +80,14 @@ impl Tracker for LocalMarkdown {
         let Some(path) = self.find_ticket(ticket)? else {
             bail!("ticket `{ticket}` not found under {}", self.root.display());
         };
-        let body = read(&path)?;
-        let ids = line_value(&body, "Blocked by:").unwrap_or_default();
         let mut blockers = Vec::new();
-        for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            // shortcut: an unknown blocker counts as unfinished; ticket #17 holds it back instead.
-            let finished = match self.find_ticket(id)? {
-                Some(p) => line_value(&read(&p)?, "Status:") == Some("done"),
-                None => false,
+        for r in markdown::blocked_by(&read(&path)?) {
+            let id = local_id(&r).to_string();
+            let finished = match self.find_ticket(&id)? {
+                Some(p) => Some(line_value(&read(&p)?, "Status:") == Some("done")),
+                None => None,
             };
-            blockers.push(Blocker {
-                id: id.to_string(),
-                finished,
-            });
+            blockers.push(Blocker { id, finished });
         }
         Ok(blockers)
     }
@@ -130,6 +126,12 @@ impl Tracker for LocalMarkdown {
     }
 }
 
+/// The ticket id a blocker reference names: a bare id, or a link or path to its file.
+fn local_id(r: &str) -> &str {
+    let name = r.rsplit('/').next().unwrap_or(r);
+    name.strip_suffix(".md").unwrap_or(name)
+}
+
 fn read(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
 }
@@ -141,6 +143,22 @@ fn read_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>> {
         .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     Ok(paths)
+}
+
+/// The file without its title and `Status:` lines, which are tracker fields, not body.
+fn ticket_body(text: &str) -> String {
+    let (mut title, mut status) = (false, false);
+    let keep = |l: &&str| {
+        if !title && l.starts_with("# ") {
+            title = true;
+        } else if !status && l.trim_start().starts_with("Status:") {
+            status = true;
+        } else {
+            return true;
+        }
+        false
+    };
+    text.lines().filter(keep).collect::<Vec<_>>().join("\n")
 }
 
 /// The text of the first `# ` heading.
