@@ -127,6 +127,17 @@ fn templates_may_reference_environment_variables() {
     assert!(refusal.contains("not approved"), "{refusal}");
 }
 
+#[test]
+fn resume_refuses_unapproved_templates_too() {
+    let s = Scratch::new();
+    tracker(&s);
+    s.repo_config(&templates(&s, ""));
+
+    let refusal = s.run(&["resume"]).fails();
+
+    assert!(refusal.contains("not approved"), "{refusal}");
+}
+
 fn sha256(text: &str) -> String {
     let path = std::env::temp_dir().join(format!("guide-{}", std::process::id()));
     fs::write(&path, text).unwrap();
