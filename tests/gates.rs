@@ -175,6 +175,10 @@ fn a_gate_with_both_dirs_and_cwd_or_a_bad_glob_is_a_config_error() {
         ),
         ("paths = [\"a[\"]", "bad glob `a[`"),
         ("dirs = [\"{\"]", "bad glob `{`"),
+        (
+            "dirs = [\"pkgs/**\"]",
+            "gate check: `dirs` entry `pkgs/**`: `**` is not supported",
+        ),
     ] {
         let s = ticket_with_gates(
             &format!("[[gates]]\nname = \"check\"\nrun = 'true'\n{gate}\n"),

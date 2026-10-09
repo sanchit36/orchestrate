@@ -294,6 +294,13 @@ fn check_gate(gate: &Gate) -> Result<()> {
     if !gate.dirs.is_empty() && gate.cwd.is_some() {
         bail!("gate {}: set `dirs` or `cwd`, not both", gate.name);
     }
+    // A `dirs` entry names folders at its own depth.
+    if let Some(dir) = gate.dirs.iter().find(|d| d.contains("**")) {
+        bail!(
+            "gate {}: `dirs` entry `{dir}`: `**` is not supported",
+            gate.name
+        );
+    }
     for pattern in gate.paths.iter().chain(&gate.dirs) {
         crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
     }

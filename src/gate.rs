@@ -100,7 +100,7 @@ fn places(gate: &Gate, wt: &Path, changed: &[String]) -> Result<Vec<String>> {
     let mut dirs = BTreeSet::new();
     for pattern in &gate.dirs {
         let pattern = pattern.trim_end_matches('/');
-        // shortcut: a dirs entry matches folders at its own depth, so `**` is not supported.
+        // A dirs entry matches folders at its own depth; config refuses `**` in one.
         let depth = pattern.split('/').count();
         let dir = glob(pattern)?;
         for file in &changed {
