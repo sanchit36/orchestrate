@@ -420,6 +420,7 @@ impl Run<'_> {
                     &wt,
                     &branch,
                     &self.config.gates,
+                    &self.config.session,
                     &self.dirs.logs,
                     &slug,
                     &message,
