@@ -130,6 +130,7 @@ fn reconcile(
                 t.outcome = kind.into();
                 if kind == "failed" {
                     t.reason = reason;
+                    run::block_dependents(s, &reading, &id, kind, events);
                 }
             })?;
         }

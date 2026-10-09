@@ -298,7 +298,7 @@ fn set_outcome(state: &mut State, id: &str, outcome: Outcome) {
 
 /// Every pending ticket blocked, directly or not, by `id` becomes `held` behind a stuck
 /// ticket or `skipped` behind a failed one.
-fn block_dependents(
+pub fn block_dependents(
     state: &mut State,
     reading: &Reading,
     id: &str,

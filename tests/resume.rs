@@ -125,6 +125,35 @@ fn resume_refuses_while_the_run_is_live() {
 }
 
 #[test]
+fn a_ticket_whose_merge_went_missing_skips_its_dependents() {
+    let s = Scratch::new();
+    s.local_markdown_tracker_with_gate("true");
+    s.spec("auth", "Login rework");
+    s.ticket("auth", "a", "Add schema", "ready-for-agent", &[]);
+    s.ticket("auth", "b", "Build API", "needs-triage", &["a"]);
+    s.commit_all();
+    s.claude_lands();
+    s.run(&["run", "auth", "--branch", "int"]).ok();
+    edit_state(&s, |st| st["status"] = "stopped".into());
+    let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
+    integration_git(
+        &s,
+        &["reset", "-q", "--hard", &format!("{}^1", merge.trim())],
+    );
+
+    let out = s.run(&["resume"]).ok();
+
+    let st = state(&s);
+    assert_eq!(st["tickets"]["a"]["outcome"], "failed", "{st}");
+    assert_eq!(st["tickets"]["b"]["outcome"], "skipped", "{st}");
+    assert_eq!(st["tickets"]["b"]["reason"], "blocked by failed a");
+    assert!(
+        out.contains("ticket b skipped: blocked by failed a"),
+        "{out}"
+    );
+}
+
+#[test]
 fn a_ticket_whose_merge_is_missing_from_the_integration_branch_becomes_failed() {
     let s = landed();
     let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
