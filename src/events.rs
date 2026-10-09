@@ -4,12 +4,17 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result};
 
 /// Set once a notification could not be shown; the rest of the run skips them.
 static UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+
+/// Notifications being shown on their own threads.
+static SHOWING: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
 
 pub struct Events {
     log: File,
@@ -45,18 +50,37 @@ impl Events {
     /// Show `body` as a desktop notification. Where none can be shown, the first
     /// failure is one event line and later notifications are skipped silently.
     pub fn notify(&mut self, body: &str) {
-        let Some(title) = &self.title else { return };
+        let Some(title) = self.title.clone() else {
+            return;
+        };
         if UNAVAILABLE.load(Ordering::Relaxed) {
             return;
         }
-        let shown = notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .show();
-        if let Err(e) = shown
-            && !UNAVAILABLE.swap(true, Ordering::Relaxed)
-        {
-            self.event(&format!("notifications skipped: {e}"));
-        }
+        let (body, log) = (body.to_string(), self.log.try_clone());
+        // Showing one can take seconds (on macOS), so the run never waits on it.
+        let showing = thread::spawn(move || {
+            let shown = notify_rust::Notification::new()
+                .summary(&title)
+                .body(&body)
+                .show();
+            if let (Err(e), Ok(log)) = (shown, log)
+                && !UNAVAILABLE.swap(true, Ordering::Relaxed)
+            {
+                Events { log, title: None }.event(&format!("notifications skipped: {e}"));
+            }
+        });
+        SHOWING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(showing);
+    }
+}
+
+/// Wait for the notifications still being shown, so the process can exit without
+/// losing the last ones.
+pub fn shown() {
+    let showing = std::mem::take(&mut *SHOWING.lock().unwrap_or_else(|e| e.into_inner()));
+    for notification in showing {
+        let _ = notification.join();
     }
 }

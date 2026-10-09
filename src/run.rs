@@ -10,7 +10,7 @@ use std::thread;
 use anyhow::{Result, bail};
 
 use crate::config::{self, MachineConfig, MaxParallel, RepoConfig};
-use crate::events::Events;
+use crate::events::{self, Events};
 use crate::git;
 use crate::integrator::Integration;
 use crate::spec::{self, Reading};
@@ -283,6 +283,7 @@ pub fn drive(
         events.event(problem);
     }
     events.event(&format!("push it with: git push -u origin {branch}"));
+    events::shown();
     Ok(())
 }
 
