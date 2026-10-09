@@ -4,7 +4,7 @@
 //! adapter JSON schema below, or the operation fails.
 
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use super::{Blocker, Spec, Ticket, Tracker, Unsupported};
+use super::{Blocker, Spec, Ticket, Tracker, Unsupported, approvals};
 use crate::config;
 
 /// shortcut: one fixed limit per template call; make it a `[tracker]` key if a tracker needs more.
@@ -139,7 +139,7 @@ impl Commands {
     /// The template's stdout. It runs in its own process group, killed after [`TIMEOUT`].
     fn run(&self, template: &str, id: &str, stdin: &str) -> Result<Vec<u8>> {
         let mut child = Command::new("sh")
-            .args(["-c", &template.replace("{id}", &quote(id))])
+            .args(["-c", &render(template, id)])
             .current_dir(&self.dir)
             .process_group(0)
             .stdin(Stdio::piped())
@@ -175,6 +175,11 @@ impl Commands {
     }
 }
 
+/// `template` as `sh -c` runs it for `id`: `{id}` replaced by the single-quoted id.
+pub fn render(template: &str, id: &str) -> String {
+    template.replace("{id}", &quote(id))
+}
+
 /// `s` as one single-quoted shell word.
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
@@ -183,17 +188,10 @@ fn quote(s: &str) -> String {
 /// Refuses templates holding a literal secret, and templates whose [`approval_hash`]
 /// is not in `approvals.toml`. Warns when the tracker guide changed since compiling.
 pub fn check(templates: &config::Commands, top: &Path) -> Result<Vec<String>> {
-    for (name, template) in named(templates) {
-        if literal_secret(template) {
-            bail!(
-                "the `{name}` template in [tracker.commands] holds what looks like a literal \
-                 secret; reference an environment variable instead"
-            );
-        }
-    }
+    refuse_secrets(templates)?;
     let hash = approval_hash(templates);
-    let path = config::machine_dir()?.join("approvals.toml");
-    if !approvals(&path)?.approved.iter().any(|a| a.hash == hash) {
+    let path = approvals::path()?;
+    if !approvals::approved(&hash)? {
         bail!(
             "the [tracker.commands] templates are not approved ({hash}); review them, then \
              approve them by adding `[[approved]]` with `hash = \"{hash}\"` to {}",
@@ -214,8 +212,21 @@ pub fn check(templates: &config::Commands, top: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+/// Refuses templates holding what looks like a literal secret.
+pub fn refuse_secrets(templates: &config::Commands) -> Result<()> {
+    for (name, template) in named(templates) {
+        if literal_secret(template) {
+            bail!(
+                "the `{name}` template in [tracker.commands] holds what looks like a literal \
+                 secret; reference an environment variable instead"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The templates that are set, by name, in a fixed order.
-fn named(t: &config::Commands) -> Vec<(&'static str, &str)> {
+pub fn named(t: &config::Commands) -> Vec<(&'static str, &str)> {
     let required = [
         ("get_spec", &t.get_spec),
         ("list_tickets", &t.list_tickets),
@@ -249,26 +260,6 @@ pub fn sha256(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect();
     format!("sha256:{hex}")
-}
-
-/// `~/.config/orchestrate/approvals.toml`: `[[approved]]` entries with a `hash`.
-#[derive(Deserialize, Default)]
-struct Approvals {
-    #[serde(default)]
-    approved: Vec<Approval>,
-}
-
-#[derive(Deserialize)]
-struct Approval {
-    hash: String,
-}
-
-fn approvals(path: &Path) -> Result<Approvals> {
-    match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).with_context(|| format!("{}", path.display())),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Approvals::default()),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
 }
 
 /// Well-known token prefixes; a word starting with one is a token.

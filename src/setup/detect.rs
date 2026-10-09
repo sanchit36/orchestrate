@@ -8,10 +8,11 @@ use anyhow::Result;
 
 use crate::git;
 
-const GUIDE: &str = "docs/agents/issue-tracker.md";
+pub const GUIDE: &str = "docs/agents/issue-tracker.md";
 const TRIAGE_LABELS: &str = "docs/agents/triage-labels.md";
 
-/// `github` or `local-markdown`: from the tracker guide's title, else the `origin` remote.
+/// `github` or `local-markdown` from the tracker guide's title, `commands` for a guide
+/// naming another tracker; without a guide, from the `origin` remote.
 pub fn kind(top: &Path) -> &'static str {
     let title = read(top, GUIDE)
         .and_then(|g| {
@@ -23,6 +24,8 @@ pub fn kind(top: &Path) -> &'static str {
         "github"
     } else if title.contains("markdown") || title.contains("local") {
         "local-markdown"
+    } else if !title.is_empty() {
+        "commands"
     } else if origin_repo(top).is_some() {
         "github"
     } else {

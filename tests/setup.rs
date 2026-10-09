@@ -37,7 +37,7 @@ fn reads_the_tracker_guide_and_triage_labels_and_never_writes_them_or_the_tracke
     let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n10\n").ok();
 
     assert!(
-        out.contains("Tracker kind (github or local-markdown) [github]"),
+        out.contains("Tracker kind (github, local-markdown or commands) [github]"),
         "{out}"
     );
     assert!(out.contains("[acme/app]"), "{out}");
@@ -71,7 +71,7 @@ fn without_a_guide_the_kind_and_location_come_from_the_git_remote() {
         .ok();
 
     assert!(
-        out.contains("Tracker kind (github or local-markdown) [github]"),
+        out.contains("Tracker kind (github, local-markdown or commands) [github]"),
         "{out}"
     );
     assert_eq!(
