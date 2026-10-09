@@ -106,6 +106,8 @@ fn default_permission_mode() -> String {
 #[derive(Deserialize, Default)]
 pub struct MachineConfig {
     pub state_dir: Option<PathBuf>,
+    /// Desktop notifications; `None` means the default, on.
+    pub notifications: Option<bool>,
 }
 
 #[derive(Deserialize)]
