@@ -7,20 +7,21 @@ use anyhow::{Result, bail};
 
 use crate::config::{self, RepoConfig};
 use crate::git;
+use crate::report;
 use crate::reporting::Events;
 use crate::run::{self, gate_lines};
 use crate::spec;
 use crate::state::{self, RunDirs, State, Store};
-use crate::tracker::{self, Tracker};
+use crate::tracker::Tracker;
 use crate::writeback;
 
 pub fn resume(top: &Path, run: Option<&str>) -> Result<()> {
     let (config, machine) = config::load(top)?;
-    for warning in tracker::check(&config, top)? {
-        eprintln!("orchestrate: warning: {warning}");
-    }
+    run::check_tracker(top, &config)?;
     let repo_dir = state::repo_dir(&machine, top)?;
-    let id = state::resolve(state::runs(&repo_dir)?, run)?.run_id;
+    let recorded = state::resolve(state::runs(&repo_dir)?, run)?;
+    run::preflight(top, &config, &recorded.branch)?;
+    let id = recorded.run_id;
     let dirs = RunDirs::open(&repo_dir, id)?;
     // Read again under the lock: a run that was live a moment ago has saved its last state.
     let mut state = State::load(&dirs.run)?;
@@ -91,8 +92,11 @@ fn reconcile(
                         .flat_map(|e| &e.criteria)
                         .map(|c| c.text.clone())
                         .collect();
-                    let gates =
-                        store.update(|s| gate_lines(&config.gates, &s.tickets[&id].gates))?;
+                    let (criteria, gates) = store.update(|s| {
+                        let t = &s.tickets[&id];
+                        let met = report::met(&t.criteria, &criteria);
+                        (met, gate_lines(&config.gates, &t.gates))
+                    })?;
                     let written = writeback::landed(tracker, cx, &id, &criteria, &sha, &gates)?;
                     store.update(|s| {
                         let t = s.tickets.get_mut(&id).unwrap();

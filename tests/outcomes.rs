@@ -103,6 +103,31 @@ fn a_done_report_with_an_unmet_criterion_is_stuck_with_the_unmet_criteria_record
 }
 
 #[test]
+fn a_done_report_leaving_out_a_criterion_is_stuck_with_that_criterion_unmet() {
+    let s = Scratch::new();
+    spec(&s, "");
+    s.write(
+        "specs/auth/a.md",
+        "# Add schema\n\nStatus: ready-for-agent\n\n## Acceptance criteria\n\n\
+         - [ ] it works\n- [ ] it migrates\n",
+    );
+    s.commit_all();
+    claude(&s, &format!("a) {COMMIT}; {};;", report("done", true, "")));
+
+    let out = s.run(&["run", "auth", "--branch", "int"]).ok();
+
+    let st = state(&s);
+    assert_eq!(st["tickets"]["a"]["outcome"], "stuck", "{st}");
+    assert_eq!(
+        st["tickets"]["a"]["unmet"],
+        serde_json::json!(["it migrates"])
+    );
+    assert!(out.contains("ticket a stuck: unmet: it migrates\n"), "{out}");
+    assert!(!merged(&s).contains("Add schema"));
+    assert_eq!(s.calls("gate").len(), 1, "only c is gated");
+}
+
+#[test]
 fn a_missing_or_malformed_report_no_new_commits_or_a_non_zero_exit_is_failed() {
     let done = report("done", true, "");
     for (arm, reason) in [

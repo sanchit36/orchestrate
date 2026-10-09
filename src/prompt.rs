@@ -42,6 +42,7 @@ When you finish, write `{REPORT_FILE}` at the root of this worktree (it is git-e
 }}
 
 Use `done` only when every acceptance criterion is met; list each criterion with its evidence.
+Copy each criterion's text exactly as the ticket has it; a criterion left out counts as unmet.
 Use `stuck` when you cannot finish, and say why in `notes`.
 "
     );

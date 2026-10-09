@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use common::Scratch;
 
 const LAND: &str = r#"echo "$slug" > "$slug.txt"; git add "$slug.txt"; git commit -q -m "work $slug"
-printf '{"status":"done","acceptance_criteria":[],"notes":""}' > .orchestrate-result.json"#;
+printf '{"status":"done","acceptance_criteria":[{"text":"it works","met":true,"evidence":"ok"}],"notes":""}' > .orchestrate-result.json"#;
 
 /// Repo config with a short tracker backoff and a gate running `gate`.
 fn config(s: &Scratch, gate: &str) {

@@ -23,7 +23,7 @@ fn ticket_with_gates(gates: &str, files: &[&str]) -> Scratch {
         "claude",
         &format!(
             "{writes}git add -A && git commit -q -m work\n\
-             printf '{{\"status\":\"done\",\"acceptance_criteria\":[],\"notes\":\"\"}}' > .orchestrate-result.json"
+             printf '{{\"status\":\"done\",\"acceptance_criteria\":[{{\"text\":\"it works\",\"met\":true,\"evidence\":\"ok\"}}],\"notes\":\"\"}}' > .orchestrate-result.json"
         ),
     );
     s

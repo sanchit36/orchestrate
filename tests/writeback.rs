@@ -7,7 +7,7 @@ use common::Scratch;
 
 const COMMIT: &str =
     r#"echo "$slug" > "$slug.txt"; git add "$slug.txt"; git commit -q -m "work $slug""#;
-const DONE: &str = r#"printf '{"status":"done","acceptance_criteria":[{"text":"it works","met":true,"evidence":"ok"}],"notes":""}' > .orchestrate-result.json"#;
+const DONE: &str = r#"printf '{"status":"done","acceptance_criteria":[{"text":"it works","met":true,"evidence":"ok"},{"text":"it is fast","met":true,"evidence":"ok"}],"notes":""}' > .orchestrate-result.json"#;
 
 /// A fake `claude` running `arms` (sh `case` arms on the worktree name); every other
 /// ticket lands.
@@ -58,7 +58,7 @@ fn log(file: &str) -> &str {
 fn landing_ticks_then_comments_then_marks_finished() {
     let s = Scratch::new();
     spec(&s, "true");
-    s.claude_lands();
+    claude(&s, "");
 
     s.run(&["run", "auth", "--branch", "int"]).ok();
 
@@ -96,7 +96,7 @@ fn the_landing_comment_lists_each_gate_as_it_really_went() {
          [[gates]]\nname = \"docs\"\nrun = \"true\"\npaths = [\"docs/**\"]\n",
     );
     s.commit_all();
-    s.claude_lands();
+    claude(&s, "");
 
     s.run(&["run", "auth", "--branch", "int"]).ok();
 
@@ -137,7 +137,7 @@ fn criteria_edited_mid_session_are_left_alone_and_listed_as_mismatches() {
 fn a_failed_ticket_gets_only_a_comment_without_gate_output() {
     let s = Scratch::new();
     spec(&s, "echo SECRET-OUTPUT; exit 3");
-    s.claude_lands();
+    claude(&s, "");
 
     s.run(&["run", "auth", "--branch", "int"]).ok();
 
@@ -177,7 +177,7 @@ fn a_stuck_ticket_gets_a_comment_with_its_notes_and_no_local_paths() {
 fn a_failing_tick_or_comment_is_recorded_and_never_fails_the_ticket_or_pauses() {
     let s = Scratch::new();
     spec(&s, "true");
-    s.claude_lands();
+    claude(&s, "");
     // Fail the first six commits in the integration worktree: three tick and three
     // comment attempts. Mark-finished then commits.
     let hook = s.repo.join(".git/hooks/pre-commit");

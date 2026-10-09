@@ -103,7 +103,7 @@ fn a_tracker_that_stops_answering_pauses_new_starts_until_it_answers_again() {
              [ \"$slug\" = a ] && mv {tracker}/spec.md {tracker}/spec.md.away\n\
              echo \"$slug\" > \"$slug.txt\"\n\
              git add \"$slug.txt\" && git commit -q -m \"work $slug\"\n\
-             printf '{{\"status\":\"done\",\"acceptance_criteria\":[],\"notes\":\"\"}}' \
+             printf '{{\"status\":\"done\",\"acceptance_criteria\":[{{\"text\":\"it works\",\"met\":true,\"evidence\":\"ok\"}}],\"notes\":\"\"}}' \
              > .orchestrate-result.json"
         ),
     );

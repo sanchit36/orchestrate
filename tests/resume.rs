@@ -191,6 +191,50 @@ fn a_landed_ticket_not_yet_marked_finished_is_marked_before_anything_new_starts(
 }
 
 #[test]
+fn marking_a_landed_ticket_on_resume_ticks_only_criteria_its_report_marked_met() {
+    let s = landed();
+    let merge = integration_git(&s, &["log", "--merges", "--format=%H", "-1"]);
+    integration_git(&s, &["reset", "-q", "--hard", merge.trim()]);
+    edit_state(&s, |st| {
+        st["tickets"]["a"]["outcome"] = "integrating".into()
+    });
+    // A criterion added after the session reported.
+    let a = worktrees(&s).join("_integration/specs/auth/a.md");
+    let body = fs::read_to_string(&a).unwrap() + "- [ ] it scales\n";
+    fs::write(&a, body).unwrap();
+    integration_git(&s, &["commit", "-q", "-am", "new criterion"]);
+
+    s.run(&["resume"]).ok();
+
+    let a = s.git(&["show", "int:specs/auth/a.md"]);
+    assert!(a.contains("- [x] it works\n"), "{a}");
+    assert!(a.contains("- [ ] it scales\n"), "{a}");
+}
+
+#[test]
+fn resume_refuses_like_run_without_a_gate_or_onto_a_protected_branch() {
+    for (config, want) in [
+        (
+            "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n",
+            "no gate configured",
+        ),
+        (
+            "version = 1\nprotected_branches = [\"int\"]\n\n[tracker]\nkind = \"local-markdown\"\n\
+             location = \"specs\"\n\n[[gates]]\nname = \"check\"\nrun = \"true\"\n",
+            "`int` is a protected branch",
+        ),
+    ] {
+        let s = landed();
+        s.repo_config(config);
+
+        let err = s.run(&["resume"]).fails();
+
+        assert!(err.contains(want), "{err}");
+        assert_eq!(state(&s)["status"], "stopped");
+    }
+}
+
+#[test]
 fn stop_resolves_run_like_every_other_command() {
     let s = landed();
     // A second, live run: `auth-2` is now an ambiguous prefix.

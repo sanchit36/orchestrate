@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use crate::config::{self, Gate, MachineConfig, MaxParallel, RepoConfig};
 use crate::git::{self, git};
 use crate::integrator::{self, Integration, Landing};
-use crate::report::Report;
+use crate::report::{self, Report};
 use crate::reporting::Events;
 use crate::spec::{self, Reading};
 use crate::state::{self, GateResult, RunDirs, State, Store, TicketState};
@@ -25,20 +25,9 @@ type Done = (String, Result<Outcome>);
 
 pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) -> Result<()> {
     let (config, machine) = config::load(top)?;
-    for warning in tracker::check(&config, top)? {
-        eprintln!("orchestrate: warning: {warning}");
-    }
-    if config.gates.is_empty() {
-        bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
-    }
+    check_tracker(top, &config)?;
+    preflight(top, &config, branch)?;
     let max = max.unwrap_or(machine.max_parallel);
-    let protected = match &config.protected_branches {
-        Some(list) => list.clone(),
-        None => git::origin_default_branch(top)?.into_iter().collect(),
-    };
-    if protected.iter().any(|b| b == branch) {
-        bail!("`{branch}` is a protected branch; pass another --branch");
-    }
     // Refuse a spec that cannot start before anything is created.
     let start = spec::read(
         tracker::open(&config, top).as_ref(),
@@ -59,6 +48,29 @@ pub fn run(top: &Path, spec_id: &str, branch: &str, max: Option<MaxParallel>) ->
     let fresh =
         |_: &dyn Tracker, _: &writeback::Context, _: &Store, _: &mut Events| Ok(HashSet::new());
     drive(top, &config, &machine, max, dirs, state, &started, fresh)
+}
+
+/// Refuse a tracker that must not be used, and print its warnings.
+pub fn check_tracker(top: &Path, config: &RepoConfig) -> Result<()> {
+    for warning in tracker::check(config, top)? {
+        eprintln!("orchestrate: warning: {warning}");
+    }
+    Ok(())
+}
+
+/// The safety checks before `run` or `resume` works toward integration branch `branch`.
+pub fn preflight(top: &Path, config: &RepoConfig, branch: &str) -> Result<()> {
+    if config.gates.is_empty() {
+        bail!("no gate configured; add a [[gates]] entry to .orchestrate/config.toml");
+    }
+    let protected = match &config.protected_branches {
+        Some(list) => list.clone(),
+        None => git::origin_default_branch(top)?.into_iter().collect(),
+    };
+    if protected.iter().any(|b| b == branch) {
+        bail!("`{branch}` is a protected branch; pass another --branch");
+    }
+    Ok(())
 }
 
 /// Run the loop of the run in `dirs`, from `state`, until nothing runs and nothing can
@@ -396,8 +408,19 @@ impl Run<'_> {
                 &format!("{}..HEAD", self.into.branch),
             ],
         )?;
-        let report = Report::read(&wt);
+        // The criteria read at dispatch: a report must cover every one of them.
+        let criteria: Vec<String> = (reading.tickets.iter())
+            .filter(|e| e.ticket.id == ticket.id)
+            .flat_map(|e| &e.criteria)
+            .map(|c| c.text.clone())
+            .collect();
+        let report = Report::read(&wt).map(|mut r| {
+            r.cover(&criteria);
+            r
+        });
+        let mut reported = Vec::new();
         if let Ok(r) = &report {
+            reported = r.acceptance_criteria.clone();
             self.ticket(&ticket.id, |t| {
                 t.criteria = r.acceptance_criteria.clone();
                 t.notes = r.notes.clone();
@@ -438,12 +461,7 @@ impl Run<'_> {
         match landing {
             Landing::Merged(sha) => {
                 self.ticket(&ticket.id, |t| t.merged = Some(sha.clone()))?;
-                let entry = reading.tickets.iter().find(|e| e.ticket.id == ticket.id);
-                let criteria: Vec<String> = entry
-                    .iter()
-                    .flat_map(|e| &e.criteria)
-                    .map(|c| c.text.clone())
-                    .collect();
+                let criteria = report::met(&reported, &criteria);
                 let written =
                     writeback::landed(self.tracker, self.cx, &ticket.id, &criteria, &sha, &gates)?;
                 worktree::remove(self.top, &wt, &branch)?;
