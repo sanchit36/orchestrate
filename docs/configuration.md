@@ -177,7 +177,7 @@ run = "make test"
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `max_parallel` | `"auto"` | The default for `run --max-parallel`: `"auto"` (from the width of the ticket graph and the CPU cores) or a number above 0. |
-| `notifications` | `true` | Desktop notifications for the events of a run. |
+| `notifications` | `true` | Desktop notifications for the events of a run. On macOS they come from the app you started the run in, such as Terminal or VS Code, and show only once you allow that app's notifications; macOS asks the first time and gives no error if you decline. |
 | `state_dir` | `$XDG_STATE_HOME/orchestrate`, else `~/.local/state/orchestrate` | Where runs keep their state, logs and worktrees. An absolute path, or one starting with `~/` for your home folder. |
 
 ### Example
