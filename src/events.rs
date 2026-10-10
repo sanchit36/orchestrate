@@ -56,6 +56,12 @@ impl Events {
         if UNAVAILABLE.load(Ordering::Relaxed) {
             return;
         }
+        // notify-rust posts as Finder by default, which macOS drops without an error, so
+        // post as the app the run was launched from. Only the first call takes effect.
+        #[cfg(target_os = "macos")]
+        let _ = notify_rust::set_application(
+            &std::env::var("__CFBundleIdentifier").unwrap_or_else(|_| "com.apple.Terminal".into()),
+        );
         let (body, log) = (body.to_string(), self.log.try_clone());
         // Showing one can take seconds (on macOS), so the run never waits on it.
         let showing = thread::spawn(move || {
