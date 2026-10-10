@@ -4,6 +4,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
@@ -11,6 +12,10 @@ use crate::config::RepoConfig;
 use crate::git::{git, succeeds};
 use crate::process;
 use crate::report::REPORT_FILE;
+
+/// Held around `git worktree add`/`remove`: run at once on one repo, one can read the
+/// other's half-written `.git/worktrees/<name>` and fail.
+static WORKTREES: Mutex<()> = Mutex::new(());
 
 /// Check out `branch` at `path`, creating the branch from `HEAD` if it does not exist.
 pub fn integration(top: &Path, path: &Path, branch: &str) -> Result<()> {
@@ -36,6 +41,7 @@ pub fn integration(top: &Path, path: &Path, branch: &str) -> Result<()> {
 /// A new `branch` from `base`, checked out at `path`, with the report file git-excluded.
 pub fn create(top: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
     let path_str = path.to_string_lossy();
+    let _held = WORKTREES.lock().unwrap_or_else(|e| e.into_inner());
     git(
         top,
         &["worktree", "add", "-q", "-b", branch, &path_str, base],
@@ -52,6 +58,7 @@ pub fn remove(top: &Path, path: &Path, branch: &str) -> Result<()> {
 
 /// Remove the worktree at `path`, keeping its branch.
 pub fn remove_worktree(top: &Path, path: &Path) -> Result<()> {
+    let _held = WORKTREES.lock().unwrap_or_else(|e| e.into_inner());
     git(
         top,
         &["worktree", "remove", "--force", &path.to_string_lossy()],
