@@ -1,0 +1,401 @@
+//! Config: loads and validates the repo and machine config files.
+//! Both carry `version = 1`; each key is valid in exactly one file.
+
+use std::fs;
+use std::io::ErrorKind;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub const REPO_CONFIG: &str = ".orchestrate/config.toml";
+const VERSION: i64 = 1;
+
+/// Top-level keys of each file, besides `version`.
+const REPO_KEYS: &[&str] = &[
+    "tracker",
+    "criteria_headings",
+    "gates",
+    "session",
+    "seed_files",
+    "prepare",
+    "protected_branches",
+];
+const MACHINE_KEYS: &[&str] = &["max_parallel", "notifications", "state_dir"];
+
+#[derive(Deserialize)]
+pub struct RepoConfig {
+    pub tracker: TrackerConfig,
+    #[serde(default = "default_criteria_headings")]
+    pub criteria_headings: Vec<String>,
+    #[serde(default)]
+    pub gates: Vec<Gate>,
+    #[serde(default)]
+    pub session: SessionConfig,
+    /// Local files (relative to the top level) copied into each fresh worktree.
+    #[serde(default)]
+    pub seed_files: Vec<PathBuf>,
+    /// A shell command run in each fresh worktree before its session.
+    pub prepare: Option<String>,
+    /// Branches a run never writes; `None` means the remote's default branch.
+    pub protected_branches: Option<Vec<String>>,
+}
+
+/// `[[gates]]`: a shell command run in the rebased ticket worktree; exit 0 passes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gate {
+    pub name: String,
+    pub run: String,
+    /// Globs against the ticket's changed files; empty means all files.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Folders (`*` allowed per segment); the gate runs once in each one the change touched.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+    /// Fixed working directory relative to the top level, for a gate without `dirs`.
+    pub cwd: Option<String>,
+    /// How long the gate may run before it is killed and fails.
+    #[serde(default = "default_gate_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
+    /// A shell command run after the gate in the same directory, even after a timeout.
+    pub teardown: Option<String>,
+}
+
+fn default_gate_timeout() -> Duration {
+    Duration::from_secs(20 * 60)
+}
+
+/// `[session]`: how sessions are launched and prompted.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionConfig {
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+    /// A repo file (relative to the top level) appended to the built-in prompt.
+    pub instructions: Option<PathBuf>,
+    /// Skill names the prompt points the session at.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Wall-clock limit of a session.
+    #[serde(default = "default_session_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            permission_mode: default_permission_mode(),
+            instructions: None,
+            skills: Vec::new(),
+            timeout: default_session_timeout(),
+        }
+    }
+}
+
+fn default_session_timeout() -> Duration {
+    Duration::from_secs(45 * 60)
+}
+
+fn default_permission_mode() -> String {
+    "bypassPermissions".into()
+}
+
+/// The machine file; keys not parsed yet are only validated by name.
+#[derive(Deserialize, Default)]
+pub struct MachineConfig {
+    pub state_dir: Option<PathBuf>,
+    /// Desktop notifications; `None` means the default, on.
+    pub notifications: Option<bool>,
+    /// The default for `--max-parallel`.
+    #[serde(default)]
+    pub max_parallel: MaxParallel,
+}
+
+/// The session ceiling: `auto` (derived by the planner) or a fixed number.
+#[derive(Clone, Copy, Default)]
+pub struct MaxParallel(pub Option<NonZeroUsize>);
+
+impl FromStr for MaxParallel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        if s == "auto" {
+            return Ok(Self(None));
+        }
+        let n = s
+            .parse()
+            .map_err(|_| "expected `auto` or a number above 0")?;
+        Ok(Self(Some(n)))
+    }
+}
+
+impl std::fmt::Display for MaxParallel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.0 {
+            Some(n) => write!(f, "{n}"),
+            None => f.write_str("auto"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MaxParallel {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = match toml::Value::deserialize(d)? {
+            toml::Value::String(s) => s,
+            other => other.to_string(),
+        };
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackerConfig {
+    pub kind: TrackerKind,
+    pub location: String,
+    #[serde(default = "default_ready")]
+    pub ready: String,
+    /// Wait between the quick retries of a failed tracker operation.
+    #[serde(default = "default_retry_delay", deserialize_with = "duration")]
+    pub retry_delay: Duration,
+    /// First wait between probes of a paused run; it doubles up to `probe_backoff_max`.
+    #[serde(default = "default_probe_backoff", deserialize_with = "duration")]
+    pub probe_backoff: Duration,
+    #[serde(default = "default_probe_backoff_max", deserialize_with = "duration")]
+    pub probe_backoff_max: Duration,
+    /// How long one adapter call (a `gh` or template command) may run before it is
+    /// killed and fails.
+    #[serde(default = "default_tracker_timeout", deserialize_with = "duration")]
+    pub timeout: Duration,
+    /// The templates of `kind = "commands"`, and only of that kind.
+    pub commands: Option<Commands>,
+}
+
+/// `[tracker.commands]`: shell command templates reaching a tracker without a built-in
+/// adapter. `{id}` is replaced by the shell-quoted spec or ticket id.
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Commands {
+    pub get_spec: String,
+    pub list_tickets: String,
+    pub list_blockers: String,
+    pub mark_finished: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tick: Option<String>,
+    /// The tracker guide (relative to the top level) the templates were compiled from,
+    /// and its hash (`sha256:<hex>`) at that time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide_hash: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrackerKind {
+    LocalMarkdown,
+    Commands,
+    /// `location` is the `owner/repo` the spec issues live in.
+    #[serde(rename = "github")]
+    GitHub,
+}
+
+fn default_ready() -> String {
+    "ready-for-agent".into()
+}
+
+fn default_retry_delay() -> Duration {
+    Duration::from_secs(2)
+}
+
+fn default_probe_backoff() -> Duration {
+    Duration::from_secs(60)
+}
+
+fn default_probe_backoff_max() -> Duration {
+    Duration::from_secs(5 * 60)
+}
+
+fn default_tracker_timeout() -> Duration {
+    Duration::from_secs(60)
+}
+
+/// A duration such as `"2s"`, `"5m"` or `"PT1M"`.
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    let text = String::deserialize(d)?;
+    let parsed: jiff::SignedDuration = text.parse().map_err(serde::de::Error::custom)?;
+    Duration::try_from(parsed).map_err(serde::de::Error::custom)
+}
+
+fn default_criteria_headings() -> Vec<String> {
+    vec!["Acceptance criteria".into(), "Acceptance".into()]
+}
+
+/// Load both config files for the repo whose git top level is `top`.
+/// The repo config is required; the machine config is optional.
+pub fn load(top: &Path) -> Result<(RepoConfig, MachineConfig)> {
+    let repo_path = top.join(REPO_CONFIG);
+    let machine_path = machine_config_path()?;
+    let Some(repo) = read(&repo_path)? else {
+        bail!(
+            "no repo config at {}; run `orchestrate setup` first",
+            repo_path.display()
+        );
+    };
+    let repo = repo_config(&repo_path, repo)?;
+    let machine = match read(&machine_path)? {
+        Some(machine) => {
+            validate(&machine_path, &machine, MACHINE_KEYS, REPO_KEYS, &repo_path)?;
+            machine
+                .try_into()
+                .with_context(|| format!("{}", machine_path.display()))?
+        }
+        None => MachineConfig::default(),
+    };
+    Ok((repo, machine))
+}
+
+/// Validate a repo config table read from (or about to be written to) `repo_path`.
+pub fn repo_config(repo_path: &Path, repo: toml::Table) -> Result<RepoConfig> {
+    validate(
+        repo_path,
+        &repo,
+        REPO_KEYS,
+        MACHINE_KEYS,
+        &machine_config_path()?,
+    )?;
+    let repo: RepoConfig = repo
+        .try_into()
+        .with_context(|| format!("{}", repo_path.display()))?;
+    let commands_kind = matches!(repo.tracker.kind, TrackerKind::Commands);
+    if commands_kind != repo.tracker.commands.is_some() {
+        bail!(
+            "{}: `[tracker.commands]` goes with `kind = \"commands\"` and nothing else",
+            repo_path.display()
+        );
+    }
+    for gate in &repo.gates {
+        check_gate(gate).with_context(|| format!("{}", repo_path.display()))?;
+    }
+    if let TrackerKind::GitHub = repo.tracker.kind {
+        check_github_repo(&repo.tracker.location)
+            .with_context(|| format!("{}", repo_path.display()))?;
+    }
+    Ok(repo)
+}
+
+fn check_gate(gate: &Gate) -> Result<()> {
+    if !gate.dirs.is_empty() && gate.cwd.is_some() {
+        bail!("gate {}: set `dirs` or `cwd`, not both", gate.name);
+    }
+    // A `dirs` entry names folders at its own depth.
+    if let Some(dir) = gate.dirs.iter().find(|d| d.contains("**")) {
+        bail!(
+            "gate {}: `dirs` entry `{dir}`: `**` is not supported",
+            gate.name
+        );
+    }
+    for pattern in gate.paths.iter().chain(&gate.dirs) {
+        crate::gate::glob(pattern).with_context(|| format!("gate {}", gate.name))?;
+    }
+    Ok(())
+}
+
+/// A GitHub `location` goes into API paths, so it must be a plain `owner/repo`.
+pub fn check_github_repo(location: &str) -> Result<()> {
+    let part = |p: &str| {
+        let allowed = |c: char| c.is_ascii_alphanumeric() || "-_.".contains(c);
+        !p.is_empty() && p != "." && p != ".." && p.chars().all(allowed)
+    };
+    match location.split_once('/') {
+        Some((owner, repo)) if part(owner) && part(repo) => Ok(()),
+        _ => bail!("tracker location `{location}` must be `owner/repo` for kind \"github\""),
+    }
+}
+
+pub fn machine_config_path() -> Result<PathBuf> {
+    Ok(machine_dir()?.join("config.toml"))
+}
+
+/// `~/.config/orchestrate`: the machine config and the template approvals.
+pub fn machine_dir() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".config/orchestrate"))
+}
+
+/// The parsed file, or `None` when it does not exist.
+pub fn read(path: &Path) -> Result<Option<toml::Table>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let table = text
+        .parse()
+        .with_context(|| format!("{}", path.display()))?;
+    Ok(Some(table))
+}
+
+fn validate(
+    path: &Path,
+    table: &toml::Table,
+    own: &[&str],
+    other: &[&str],
+    other_path: &Path,
+) -> Result<()> {
+    let path = path.display();
+    match table.get("version") {
+        Some(toml::Value::Integer(VERSION)) => {}
+        None => bail!("{path}: missing `version = {VERSION}`"),
+        Some(v) => bail!("{path}: unsupported version {v}, expected `version = {VERSION}`"),
+    }
+    for key in table.keys().filter(|k| *k != "version") {
+        if other.contains(&key.as_str()) {
+            bail!(
+                "{path}: key `{key}` belongs in {}, not here",
+                other_path.display()
+            );
+        }
+        if !own.contains(&key.as_str()) {
+            bail!("{path}: unknown key `{key}`");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOC: &str = include_str!("../docs/configuration.md");
+
+    #[test]
+    fn configuration_doc_names_every_top_level_key() {
+        for key in REPO_KEYS.iter().chain(MACHINE_KEYS) {
+            assert!(DOC.contains(&format!("`{key}`")), "`{key}` is undocumented");
+        }
+    }
+
+    /// Every ```toml example is a whole config file the loader accepts.
+    #[test]
+    fn configuration_doc_examples_load() {
+        let blocks: Vec<_> = DOC.split("```toml\n").skip(1).collect();
+        assert!(blocks.len() >= 2, "a repo and a machine example");
+        for block in blocks {
+            let table: toml::Table = block.split("```").next().unwrap().parse().unwrap();
+            if table.contains_key("tracker") {
+                repo_config(Path::new(REPO_CONFIG), table).unwrap();
+            } else {
+                let (here, there) = (Path::new("machine"), Path::new("repo"));
+                validate(here, &table, MACHINE_KEYS, REPO_KEYS, there).unwrap();
+                let _: MachineConfig = table.try_into().unwrap();
+            }
+        }
+    }
+}
