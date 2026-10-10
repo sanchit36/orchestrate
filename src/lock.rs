@@ -31,6 +31,15 @@ fn path(repo_dir: &Path) -> PathBuf {
     repo_dir.join("lock")
 }
 
+/// Env var holding the pid of a `--detach` launcher, for the run it launched.
+pub const LAUNCHER: &str = "ORCHESTRATE_LAUNCHER";
+
+/// Where a detached run copies its lock for its launcher: a fast run can take and let
+/// go of the lock between two polls, but this copy stays until the launcher takes it.
+fn started(repo_dir: &Path, launcher: u32) -> PathBuf {
+    repo_dir.join(format!("started.{launcher}"))
+}
+
 /// Take the lock for `run` in this process. Refuses while a live process holds it;
 /// takes over, with a notice, a lock whose pid is gone.
 pub fn acquire(repo_dir: &Path, run: &str) -> Result<Lock> {
@@ -47,10 +56,20 @@ pub fn acquire(repo_dir: &Path, run: &str) -> Result<Lock> {
     let taken = loop {
         match fs::hard_link(&tmp, &lock) {
             Ok(()) => {
-                break Ok(Lock {
+                let lock = Lock {
                     path: lock,
                     taken_over,
-                });
+                };
+                // Only the launcher's own child answers it, not runs nested under that run.
+                let parent = unsafe { libc::getppid() } as u32;
+                if std::env::var(LAUNCHER).is_ok_and(|v| v == parent.to_string()) {
+                    let started = started(repo_dir, parent);
+                    let _ = fs::remove_file(&started);
+                    if let Err(e) = fs::hard_link(&tmp, &started) {
+                        break Err(e).with_context(|| format!("creating {}", started.display()));
+                    }
+                }
+                break Ok(lock);
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             Err(e) => break Err(e).with_context(|| format!("creating {}", lock.display())),
@@ -77,10 +96,23 @@ pub fn acquire(repo_dir: &Path, run: &str) -> Result<Lock> {
     taken
 }
 
+/// The holder of the run this process launched with `--detach`, once it took the lock.
+pub fn take_started(repo_dir: &Path) -> Result<Option<Holder>> {
+    let started = started(repo_dir, std::process::id());
+    let holder = read_file(&started)?;
+    if holder.is_some() {
+        let _ = fs::remove_file(&started);
+    }
+    Ok(holder)
+}
+
 /// The lock's holder, if there is a lock file.
 pub fn read(repo_dir: &Path) -> Result<Option<Holder>> {
-    let lock = path(repo_dir);
-    match fs::read_to_string(&lock) {
+    read_file(&path(repo_dir))
+}
+
+fn read_file(lock: &Path) -> Result<Option<Holder>> {
+    match fs::read_to_string(lock) {
         Ok(s) => Ok(Some(
             toml::from_str(&s).with_context(|| format!("reading {}", lock.display()))?,
         )),

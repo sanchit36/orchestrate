@@ -79,6 +79,7 @@ pub fn detach(top: &Path, args: &[String]) -> Result<()> {
     let repo_dir = state::repo_dir(&machine, top)?;
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.args(args)
+        .env(lock::LAUNCHER, std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -91,12 +92,14 @@ pub fn detach(top: &Path, args: &[String]) -> Result<()> {
     let mut child = cmd.spawn().context("re-launching orchestrate")?;
     let pid = child.id() as i32;
     loop {
-        if let Some(h) = lock::read(&repo_dir)?.filter(|h| h.pid == pid) {
+        // Checked before the run's copy of its lock, so an exit seen here came after it.
+        let exited = child.try_wait()?;
+        if let Some(h) = lock::take_started(&repo_dir)?.filter(|h| h.pid == pid) {
             let log = repo_dir.join("runs").join(&h.run).join("logs/run.log");
             println!("run {} detached\nlog: {}", h.run, log.display());
             return Ok(());
         }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = exited {
             let mut err = String::new();
             child.stderr.take().unwrap().read_to_string(&mut err)?;
             bail!("the detached run exited ({status}) before starting:\n{err}");
