@@ -48,7 +48,8 @@ Run everything from inside your repo.
    ```
 
    Setup detects your tracker, proposes gates from your build files, and asks you to confirm each answer (Enter takes the default in brackets).
-   It keeps asking for a gate until you have at least one.
+   On a repo with no tests yet, it proposes a placeholder gate, `placeholder` running `true`, which always passes so you can start right away and write your tests through orchestrate.
+   Work a placeholder lets through lands unchecked, so replace it with real gates once you have them, by re-running setup or editing the config.
    It checks the tracker on one real spec, then writes `.orchestrate/config.toml`.
    Commit that file.
 
