@@ -264,6 +264,25 @@ fn resume_refuses_like_run_without_a_gate_or_onto_a_protected_branch() {
 }
 
 #[test]
+fn resume_warns_like_run_only_when_every_gate_is_a_placeholder() {
+    let warning =
+        "orchestrate: warning: every gate is a placeholder (`true`); work will land unchecked";
+    let s = landed();
+
+    let err = s.run(&["resume"]).stderr();
+    assert!(err.contains(warning), "{err}");
+
+    edit_state(&s, |st| st["status"] = "stopped".into());
+    s.repo_config(
+        "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n\n\
+         [[gates]]\nname = \"placeholder\"\nrun = \"true\"\n\n\
+         [[gates]]\nname = \"lint\"\nrun = \"exit 0\"\n",
+    );
+    let err = s.run(&["resume"]).stderr();
+    assert!(!err.contains("placeholder"), "{err}");
+}
+
+#[test]
 fn stop_resolves_run_like_every_other_command() {
     let s = landed();
     // A second, live run: `auth-2` is now an ambiguous prefix.

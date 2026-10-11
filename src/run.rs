@@ -74,6 +74,11 @@ pub fn preflight(top: &Path, config: &RepoConfig, branch: &str) -> Result<()> {
     if protected.iter().any(|b| b == branch) {
         bail!("`{branch}` is a protected branch; pass another --branch");
     }
+    if config.gates.iter().all(|g| g.run == "true") {
+        eprintln!(
+            "orchestrate: warning: every gate is a placeholder (`true`); work will land unchecked"
+        );
+    }
     Ok(())
 }
 
