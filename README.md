@@ -183,6 +183,7 @@ Works the spec until nothing more can start, landing each ticket on `<branch>`.
 
 It prints one timestamped line per event, the same lines it appends to the run log.
 It refuses to start without a gate, or while another run of the same repo is live.
+When every gate is a placeholder (its command is exactly `true`), it warns at start that work will land unchecked, and starts anyway.
 
 ### `orchestrate status [ticket]`
 

@@ -54,6 +54,37 @@ fn run_refuses_with_no_gate_configured() {
 }
 
 #[test]
+fn run_warns_once_when_every_gate_is_a_placeholder_and_still_lands() {
+    let s = chain();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]);
+    out.ok();
+
+    let err = out.stderr();
+    let warning =
+        "orchestrate: warning: every gate is a placeholder (`true`); work will land unchecked";
+    assert_eq!(err.matches(warning).count(), 1, "{err}");
+    s.git(&["cat-file", "-e", "int:a.txt"]);
+}
+
+#[test]
+fn run_does_not_warn_with_a_real_gate_next_to_the_placeholder() {
+    let s = chain();
+    s.repo_config(
+        "version = 1\n\n[tracker]\nkind = \"local-markdown\"\nlocation = \"specs\"\n\n\
+         [[gates]]\nname = \"placeholder\"\nrun = \"true\"\n\n\
+         [[gates]]\nname = \"test\"\nrun = \"test -f a.txt || test -f b.txt\"\n",
+    );
+    s.commit_all();
+
+    let out = s.run(&["run", "auth", "--branch", "int"]);
+    out.ok();
+
+    assert!(!out.stderr().contains("placeholder"), "{}", out.stderr());
+    s.git(&["cat-file", "-e", "int:b.txt"]);
+}
+
+#[test]
 fn the_integration_branch_is_created_from_head_with_its_worktree_under_the_run() {
     let s = chain();
     let head = s.git(&["rev-parse", "HEAD"]);
