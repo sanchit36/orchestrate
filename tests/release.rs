@@ -3,8 +3,9 @@ mod common;
 use common::Scratch;
 
 #[test]
-fn version_starts_at_0_1_0() {
+fn version_is_the_crate_version() {
     let s = Scratch::new();
 
-    assert_eq!(s.run(&["--version"]).ok(), "orchestrate 0.1.0\n");
+    let want = format!("orchestrate {}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(s.run(&["--version"]).ok(), want);
 }
