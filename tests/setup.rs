@@ -182,6 +182,54 @@ fn proposes_detected_gates_to_keep_edit_or_drop_and_takes_hand_entered_ones() {
     );
 }
 
+const NPM_INIT_TEST: &str = r#""test": "echo \"Error: no test specified\" && exit 1""#;
+
+#[test]
+fn skips_the_npm_init_test_stub_and_falls_back_to_the_placeholder() {
+    let s = Scratch::new();
+    local_spec(&s);
+    s.write(
+        "package.json",
+        &format!(r#"{{"scripts": {{{NPM_INIT_TEST}}}}}"#),
+    );
+
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
+
+    assert!(!out.contains("npm-test"), "{out}");
+    assert!(
+        out.contains("Gate `placeholder` (- drops it) [true]"),
+        "{out}"
+    );
+    let gates = repo_config(&s)["gates"].as_array().unwrap().clone();
+    assert_eq!(gates.len(), 1, "{gates:?}");
+    assert_eq!(gates[0]["run"].as_str(), Some("true"));
+}
+
+#[test]
+fn skips_the_npm_init_test_stub_but_keeps_other_npm_scripts() {
+    let s = Scratch::new();
+    local_spec(&s);
+    s.write(
+        "package.json",
+        &format!(r#"{{"scripts": {{"typecheck": "tsc", "lint": "eslint .", {NPM_INIT_TEST}}}}}"#),
+    );
+
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\n\n\n\n\n\nauth\n")
+        .ok();
+
+    assert!(!out.contains("npm-test"), "{out}");
+    assert!(!out.contains("placeholder"), "{out}");
+    let config = repo_config(&s);
+    let gates: Vec<&str> = config["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(gates, ["npm-typecheck", "npm-lint"]);
+}
+
 #[test]
 fn proposes_ignored_local_files_as_seed_files_and_states_the_permission_default() {
     let s = Scratch::new();
