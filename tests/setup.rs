@@ -34,9 +34,7 @@ fn reads_the_tracker_guide_and_triage_labels_and_never_writes_them_or_the_tracke
     s.git(&["remote", "add", "origin", "git@github.com:acme/app.git"]);
     let gh = github_spec(&s);
 
-    let out = s
-        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\n10\n")
-        .ok();
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\n10\n").ok();
 
     assert!(
         out.contains("Tracker kind (github, local-markdown or commands) [github]"),
@@ -70,7 +68,7 @@ fn without_a_guide_the_kind_and_location_come_from_the_git_remote() {
     github_spec(&s);
 
     let out = s
-        .run_with_input(&["setup"], "\n\nagent-go\n\ncheck: true\n\n\n\n10\n")
+        .run_with_input(&["setup"], "\n\nagent-go\n\n\n\n\n\n10\n")
         .ok();
 
     assert!(
@@ -111,9 +109,7 @@ fn defaults_verify_a_local_markdown_spec_and_write_a_loadable_config() {
     local_spec(&s);
 
     // Every answer the default, then the spec to verify on.
-    let out = s
-        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nauth\n")
-        .ok();
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
 
     assert!(
         out.contains("Spec auth: Login rework\n\nFrontier:\n  02-api  Build API\n"),
@@ -131,6 +127,14 @@ fn defaults_verify_a_local_markdown_spec_and_write_a_loadable_config() {
     let config = repo_config(&s);
     assert_eq!(config["tracker"]["kind"].as_str(), Some("local-markdown"));
     assert_eq!(config["tracker"]["location"].as_str(), Some("specs"));
+    assert!(
+        out.contains("Gate `placeholder` (- drops it) [true]"),
+        "no gate detected proposes the placeholder: {out}"
+    );
+    let gates = config["gates"].as_array().unwrap();
+    assert_eq!(gates.len(), 1, "{gates:?}");
+    assert_eq!(gates[0]["name"].as_str(), Some("placeholder"));
+    assert_eq!(gates[0]["run"].as_str(), Some("true"));
     let plan = s.run(&["plan", "auth"]).ok();
     assert!(plan.contains("02-api  Build API"), "{plan}");
 }
@@ -178,6 +182,54 @@ fn proposes_detected_gates_to_keep_edit_or_drop_and_takes_hand_entered_ones() {
     );
 }
 
+const NPM_INIT_TEST: &str = r#""test": "echo \"Error: no test specified\" && exit 1""#;
+
+#[test]
+fn skips_the_npm_init_test_stub_and_falls_back_to_the_placeholder() {
+    let s = Scratch::new();
+    local_spec(&s);
+    s.write(
+        "package.json",
+        &format!(r#"{{"scripts": {{{NPM_INIT_TEST}}}}}"#),
+    );
+
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
+
+    assert!(!out.contains("npm-test"), "{out}");
+    assert!(
+        out.contains("Gate `placeholder` (- drops it) [true]"),
+        "{out}"
+    );
+    let gates = repo_config(&s)["gates"].as_array().unwrap().clone();
+    assert_eq!(gates.len(), 1, "{gates:?}");
+    assert_eq!(gates[0]["run"].as_str(), Some("true"));
+}
+
+#[test]
+fn skips_the_npm_init_test_stub_but_keeps_other_npm_scripts() {
+    let s = Scratch::new();
+    local_spec(&s);
+    s.write(
+        "package.json",
+        &format!(r#"{{"scripts": {{"typecheck": "tsc", "lint": "eslint .", {NPM_INIT_TEST}}}}}"#),
+    );
+
+    let out = s
+        .run_with_input(&["setup"], "\n\n\n\n\n\n\n\n\nauth\n")
+        .ok();
+
+    assert!(!out.contains("npm-test"), "{out}");
+    assert!(!out.contains("placeholder"), "{out}");
+    let config = repo_config(&s);
+    let gates: Vec<&str> = config["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(gates, ["npm-typecheck", "npm-lint"]);
+}
+
 #[test]
 fn proposes_ignored_local_files_as_seed_files_and_states_the_permission_default() {
     let s = Scratch::new();
@@ -195,9 +247,7 @@ fn proposes_ignored_local_files_as_seed_files_and_states_the_permission_default(
         s.write(f, "x");
     }
 
-    let out = s
-        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nauth\n")
-        .ok();
+    let out = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nauth\n").ok();
 
     assert!(
         out.contains("[.env, .env.local, .claude/settings.local.json]"),
@@ -222,7 +272,7 @@ fn asks_machine_preferences_only_when_the_machine_config_is_missing() {
     fs::remove_file(&machine).unwrap();
 
     let out = s
-        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\n3\nno\nauth\n")
+        .run_with_input(&["setup"], "\n\n\n\n\n\n\n\n3\nno\nauth\n")
         .ok();
 
     assert!(out.contains("Desktop notifications"), "{out}");
@@ -240,7 +290,7 @@ fn a_failed_verification_writes_nothing() {
     local_spec(&s);
 
     let err = s
-        .run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nnope\n")
+        .run_with_input(&["setup"], "\n\n\n\n\n\n\n\nnope\n")
         .fails();
 
     assert!(err.contains("verification failed"), "{err}");
@@ -251,7 +301,7 @@ fn a_failed_verification_writes_nothing() {
 fn skipping_verification_warns_and_saves() {
     let s = Scratch::new();
 
-    let run = s.run_with_input(&["setup"], "\n\n\n\ncheck: true\n\n\n\nskip\n");
+    let run = s.run_with_input(&["setup"], "\n\n\n\n\n\n\n\nskip\n");
 
     run.ok();
     let err = run.stderr();
@@ -286,6 +336,11 @@ fn setup_asks_until_there_is_a_gate_and_never_saves_without_one() {
         .ok();
 
     assert!(out.contains("At least one gate is required"), "{out}");
+    assert!(out.contains("enter `placeholder: true`"), "{out}");
+    assert!(
+        !out.contains("Gate `placeholder`"),
+        "detected gates replace the placeholder"
+    );
     assert_eq!(repo_config(&s)["gates"][0]["run"].as_str(), Some("true"));
 }
 
@@ -320,6 +375,10 @@ fn re_running_shows_current_values_as_defaults_and_keeps_other_settings() {
     assert!(
         !out.contains("cargo-test"),
         "current gates replace detection"
+    );
+    assert!(
+        !out.contains("placeholder"),
+        "current gates replace the placeholder"
     );
     let config = repo_config(&s);
     assert_eq!(config["prepare"].as_str(), Some("make deps"));

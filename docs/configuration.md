@@ -61,6 +61,10 @@ The first matching heading in a ticket body wins.
 
 Default: none.
 `run` refuses to start without at least one gate.
+On a repo where setup detects no gates and the config has none, setup proposes a placeholder gate, `placeholder` running `true`.
+It always passes, so work it lets through lands unchecked; replace it with real gates once the repo has tests.
+A gate whose `run` is exactly `true` is a placeholder gate: it always passes and stands in until the repo has real checks.
+When every gate is a placeholder, `run` and `resume` print a warning at start that work will land unchecked, then carry on.
 
 Each `[[gates]]` entry is a shell command run with `sh -c` in the ticket's worktree after it is rebased onto the integration branch.
 Gates run in the order listed; exit 0 passes, and the first failure stops the ticket from landing.

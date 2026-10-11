@@ -48,7 +48,8 @@ Run everything from inside your repo.
    ```
 
    Setup detects your tracker, proposes gates from your build files, and asks you to confirm each answer (Enter takes the default in brackets).
-   It keeps asking for a gate until you have at least one.
+   On a repo with no tests yet, it proposes a placeholder gate, `placeholder` running `true`, which always passes so you can start right away and write your tests through orchestrate.
+   Work a placeholder lets through lands unchecked, so replace it with real gates once you have them, by re-running setup or editing the config.
    It checks the tracker on one real spec, then writes `.orchestrate/config.toml`.
    Commit that file.
 
@@ -182,6 +183,7 @@ Works the spec until nothing more can start, landing each ticket on `<branch>`.
 
 It prints one timestamped line per event, the same lines it appends to the run log.
 It refuses to start without a gate, or while another run of the same repo is live.
+When every gate is a placeholder (its command is exactly `true`), it warns at start that work will land unchecked, and starts anyway.
 
 ### `orchestrate status [ticket]`
 

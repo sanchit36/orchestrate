@@ -78,7 +78,9 @@ pub fn gates(top: &Path) -> Vec<(String, String)> {
             .and_then(|p| p.get("scripts").cloned())
             .unwrap_or_default();
         for script in ["typecheck", "lint", "test"] {
-            if scripts.get(script).is_some() {
+            let run = scripts.get(script).and_then(|r| r.as_str());
+            // The `npm init` default test script only fails, so it is no gate.
+            if run.is_some_and(|r| !r.contains("Error: no test specified")) {
                 add(&format!("npm-{script}"), &format!("npm run {script}"));
             }
         }

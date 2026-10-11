@@ -120,9 +120,9 @@ pub fn setup(top: &Path, input: &mut dyn BufRead) -> Result<()> {
     Ok(())
 }
 
-/// Current gates (or detected ones) one by one, then hand-entered ones.
+/// Current gates (or detected ones, else a placeholder) one by one, then hand-entered ones.
 fn ask_gates(ask: &mut Ask, top: &Path, current: Option<&Value>) -> Result<Vec<Value>> {
-    let proposed: Vec<Table> = match current {
+    let mut proposed: Vec<Table> = match current {
         Some(gates) => gates
             .as_array()
             .context("`gates` must be an array")?
@@ -136,6 +136,12 @@ fn ask_gates(ask: &mut Ask, top: &Path, current: Option<&Value>) -> Result<Vec<V
             })
             .collect(),
     };
+    if proposed.is_empty() {
+        proposed.push(Table::from_iter([
+            ("name".into(), "placeholder".into()),
+            ("run".into(), "true".into()),
+        ]));
+    }
     println!("Gates run in a ticket's rebased worktree and must pass before it lands.");
     let mut gates = Vec::new();
     for mut gate in proposed {
@@ -153,6 +159,9 @@ fn ask_gates(ask: &mut Ask, top: &Path, current: Option<&Value>) -> Result<Vec<V
             (true, false) => return Ok(gates),
             (true, true) => {
                 println!("At least one gate is required: `run` refuses to start without one.");
+                println!(
+                    "Tip: enter `placeholder: true` to land work unchecked until you have tests."
+                );
                 continue;
             }
             _ => {}

@@ -65,3 +65,7 @@ _Avoid_: staging branch, feature branch
 **Gate**:
 A check that runs against a session's work and decides whether it may land on the integration branch.
 _Avoid_: check, CI step
+
+**Placeholder gate**:
+A gate that always passes, standing in until the repo has real checks; work it lets through lands unchecked.
+_Avoid_: dummy gate, no-op gate
