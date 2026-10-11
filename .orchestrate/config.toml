@@ -1,0 +1,23 @@
+version = 1
+criteria_headings = ["Acceptance criteria", "Acceptance"]
+seed_files = []
+
+[[gates]]
+name = "cargo-test"
+run = "cargo test"
+
+[[gates]]
+name = "fmt"
+run = "cargo fmt --check"
+
+[[gates]]
+name = "clippy"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[session]
+permission_mode = "bypassPermissions"
+
+[tracker]
+kind = "github"
+location = "sanchit36/orchestrate"
+ready = "ready-for-agent"
